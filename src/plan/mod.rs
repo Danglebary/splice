@@ -62,7 +62,21 @@ pub enum NearMiss {
     /// The lines above the first elision match from this line, and the lines below it are
     /// found nowhere after them.
     AfterElision { file_line: usize },
+    /// The longest start of an inline hunk's text the file holds runs up to this line,
+    /// and `expected` and `found` are the two texts from where they part.
+    Diverges {
+        file_line: usize,
+        expected: String,
+        found: String,
+    },
 }
+
+/// The fewest characters an inline hunk and the file share before a divergence is named:
+/// a shorter shared start occurs almost anywhere and points nowhere useful.
+const NEAR_MISS_PREFIX_CHARS_MIN: usize = 8;
+
+/// How many characters of each side a diverging near miss shows.
+const NEAR_MISS_SNIPPET_CHARS_MAX: usize = 40;
 
 /// Applies every hunk to `original`, or `None` for a file that does not exist.
 ///
@@ -100,6 +114,11 @@ pub fn plan(original: Option<&str>, hunks: &[Hunk]) -> Result<String, Vec<Refusa
                 replacement,
                 expectation,
             } => regex_edits(&document, pattern, replacement, *expectation),
+            Operation::Inline {
+                old,
+                new,
+                expectation,
+            } => inline_edits(&document, old, new, *expectation),
         };
         match outcome {
             Ok(replacements) if unchanged(text, &replacements) => {
@@ -209,11 +228,13 @@ impl<'t> Document<'t> {
         self.lines.len()
     }
 
-    /// The one-based number of the line holding `byte`.
+    /// The one-based number of the line holding `byte`; the end of the text counts as
+    /// the last line.
     fn line_number_of_byte(&self, byte: usize) -> usize {
         assert!(byte <= self.text.len(), "a match starts inside the text");
         let index = self.lines.partition_point(|span| span.end <= byte);
-        after(index)
+        let last = self.lines.len().saturating_sub(1);
+        after(index.min(last))
     }
 
     fn span(&self, index: usize) -> LineSpan {
@@ -244,7 +265,7 @@ fn before(index: usize) -> usize {
 
 fn offset(start: usize, by: usize) -> usize {
     let Some(sum) = start.checked_add(by) else {
-        unreachable!("a line index plus a block's length fits a usize");
+        unreachable!("an index into a text plus a length inside it fits a usize");
     };
     sum
 }
@@ -549,6 +570,95 @@ fn regex_edits(
         found,
         found_lines,
         near_miss: None,
+    })
+}
+
+/// Every occurrence of the joined text. A hunk declared `all` takes them left to right
+/// without overlap; any other counts overlapping occurrences too, so text that matches
+/// twice within one span is refused as ambiguous.
+fn inline_edits(
+    document: &Document<'_>,
+    old: &[String],
+    new: &[String],
+    expectation: Expectation,
+) -> Result<Vec<Replacement>, Reason> {
+    let pattern = old.join(document.eol);
+    let replacement = new.join(document.eol);
+    let Some(first) = pattern.chars().next() else {
+        unreachable!("the parser refuses an inline hunk without text");
+    };
+    let step = if matches!(expectation, Expectation::All) {
+        pattern.len()
+    } else {
+        first.len_utf8()
+    };
+    let mut matches = Vec::new();
+    let mut from = 0;
+    while let Some(found) = document
+        .text
+        .get(from..)
+        .and_then(|rest| rest.find(pattern.as_str()))
+    {
+        let start = offset(from, found);
+        let range = start..offset(start, pattern.len());
+        let line = document.line_number_of_byte(start);
+        let text = replacement.clone();
+        matches.push((line, Replacement { range, text }));
+        from = offset(start, step);
+    }
+    choose(matches, expectation).map_err(|(found, found_lines)| {
+        let near_miss = if found == 0 {
+            inline_near_miss(document, &pattern)
+        } else {
+            None
+        };
+        Reason::Count {
+            expected: expectation,
+            found,
+            found_lines,
+            near_miss,
+        }
+    })
+}
+
+/// The longest start of `pattern` the file holds, found by halving: a start that occurs
+/// means every shorter start occurs too.
+fn inline_near_miss(document: &Document<'_>, pattern: &str) -> Option<NearMiss> {
+    let ends: Vec<usize> = pattern
+        .char_indices()
+        .map(|(index, character)| offset(index, character.len_utf8()))
+        .collect();
+    let prefix = |characters: usize| -> &str {
+        let end = characters
+            .checked_sub(1)
+            .and_then(|last| ends.get(last))
+            .copied()
+            .unwrap_or_default();
+        pattern.get(..end).unwrap_or_default()
+    };
+    let mut low = 0;
+    let mut high = ends.len();
+    while low < high {
+        let middle = after(low.midpoint(high));
+        if document.text.contains(prefix(middle)) {
+            low = middle;
+        } else {
+            high = before(middle);
+        }
+    }
+    assert!(low < ends.len(), "a pattern found whole is no near miss");
+    if low < NEAR_MISS_PREFIX_CHARS_MIN.min(ends.len()) {
+        return None;
+    }
+    let shared = prefix(low);
+    let start = document.text.find(shared)?;
+    let parted = offset(start, shared.len());
+    let expected = pattern.get(shared.len()..)?;
+    let found = document.text.get(parted..)?;
+    Some(NearMiss::Diverges {
+        file_line: document.line_number_of_byte(parted),
+        expected: expected.chars().take(NEAR_MISS_SNIPPET_CHARS_MAX).collect(),
+        found: found.chars().take(NEAR_MISS_SNIPPET_CHARS_MAX).collect(),
     })
 }
 

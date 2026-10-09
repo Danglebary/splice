@@ -378,6 +378,80 @@ mod given_a_regex_hunk {
     }
 }
 
+mod given_an_inline_hunk {
+    use super::*;
+
+    #[test]
+    fn when_parsed_then_the_removed_and_added_lines_are_held_as_the_two_texts() {
+        let script =
+            parse("=== a\n@@ inline all\n-keeps every event\n+keeps every event in order\n")
+                .unwrap();
+
+        assert_eq!(
+            script.sections[0].hunks[0].operation,
+            Operation::Inline {
+                old: vec!["keeps every event".to_owned()],
+                new: vec!["keeps every event in order".to_owned()],
+                expectation: Expectation::All,
+            }
+        );
+    }
+
+    #[test]
+    fn when_parsed_holding_no_added_line_then_the_replacement_is_empty() {
+        let script = parse("=== a\n@@ inline\n- and nothing else\n").unwrap();
+
+        assert_eq!(
+            script.sections[0].hunks[0].operation,
+            Operation::Inline {
+                old: vec![" and nothing else".to_owned()],
+                new: Vec::new(),
+                expectation: Expectation::Once,
+            }
+        );
+    }
+
+    #[test]
+    fn when_parsed_holding_a_context_line_then_it_is_refused_at_that_line() {
+        assert_eq!(
+            fault_of("=== a\n@@ inline\n-x\n y\n+z\n"),
+            (4, Fault::InlineWithContext)
+        );
+    }
+
+    #[test]
+    fn when_parsed_holding_only_an_empty_removed_line_then_it_is_refused_as_without_text() {
+        assert_eq!(
+            fault_of("=== a\n@@ inline\n-\n+z\n"),
+            (2, Fault::InlineWithoutText)
+        );
+    }
+
+    #[test]
+    fn when_parsed_holding_no_removed_line_then_it_is_refused_as_without_text() {
+        assert_eq!(
+            fault_of("=== a\n@@ inline\n+z\n"),
+            (2, Fault::InlineWithoutText)
+        );
+    }
+
+    #[test]
+    fn when_parsed_with_a_replacement_equal_to_the_text_then_it_is_refused_as_changing_nothing() {
+        assert_eq!(
+            fault_of("=== a\n@@ inline\n-same\n+same\n"),
+            (2, Fault::ChangesNothing)
+        );
+    }
+
+    #[test]
+    fn when_parsed_holding_inline_line_then_it_is_refused_as_an_unknown_header() {
+        let (line, fault) = fault_of("=== a\n@@ inline line 3\n-x\n+y\n");
+
+        assert_eq!(line, 2);
+        assert!(matches!(fault, Fault::UnknownHeader { .. }));
+    }
+}
+
 mod given_append_and_create_hunks {
     use super::*;
 

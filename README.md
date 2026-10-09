@@ -19,7 +19,7 @@ splice <<'EOF' && cargo test
 EOF
 ```
 
-`splice --help` prints the whole grammar: match counts, line anchors, `~` for a run of lines, regex hunks, appends, creates, and `splice try`, which applies a script, runs a command, and restores every file afterwards.
+`splice --help` prints the whole grammar: match counts, line anchors, `~` for a run of lines, inline hunks that change a phrase mid-line, regex hunks, appends, creates, and `splice try`, which applies a script, runs a command, and restores every file afterwards.
 
 ## Install
 

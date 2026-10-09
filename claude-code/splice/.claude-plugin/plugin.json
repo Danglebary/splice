@@ -1,6 +1,6 @@
 {
   "name": "splice",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A skill teaching agents to edit files with the splice binary, and a hook blocking edits through sed -i, perl -i, awk -i inplace, and Python or Node file writes. Needs the splice binary on PATH.",
   "author": {
     "name": "Danglebary"
