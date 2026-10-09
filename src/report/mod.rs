@@ -47,15 +47,20 @@ Headers:
   @@ all                 one match or more, each one changed
   @@ count N             exactly N matches
   @@ line N              the match starts at line N of the file
+  @@ inline [all|count N]
+                         '-' lines join into text found anywhere, mid-line included,
+                         and '+' lines into what replaces it; a phrase in a long line
   @@ regex [all|count N] '-' lines join into one regex, '+' lines into its replacement
                          ($1, ${name}; $$ for a literal $)
   @@ append [jsonl]      '+' lines added at the end; jsonl checks each line is JSON
   @@ create              '+' lines written to a file that does not exist yet
 
-Matching is literal and line by line. Every hunk matches the file as it was before any
-hunk applied, so line numbers stay valid across a batch and hunks must not overlap. A
-hunk that would leave its file unchanged is refused. Blank lines at a hunk's edges are
-dropped; write a lone space for a blank context line there.
+Matching is literal and by whole lines, except under inline, which matches text
+anywhere and joins its lines at the file's own line break, and regex. Every hunk
+matches the file as it was before any hunk applied, so line numbers stay valid across
+a batch and hunks must not overlap. A hunk that would leave its file unchanged is
+refused. Blank lines at a hunk's edges are dropped; write a lone space for a blank
+context line there.
 
 Exit status:
   0  every file written
@@ -91,7 +96,8 @@ fn fault(fault: &Fault) -> String {
         Fault::FileWithoutHunks => "no `@@` hunk follows this file".to_owned(),
         Fault::UnknownHeader { header } => format!(
             "unknown header `@@ {header}`; expected `@@`, `@@ all`, `@@ count N`, `@@ line N`, \
-             `@@ regex [all|count N]`, `@@ append [jsonl]`, or `@@ create`"
+             `@@ inline [all|count N]`, `@@ regex [all|count N]`, `@@ append [jsonl]`, \
+             or `@@ create`"
         ),
         Fault::InvalidNumber { word } => format!("`{word}` is not a whole number of 1 or more"),
         Fault::UnexpectedLine => {
@@ -107,6 +113,12 @@ fn fault(fault: &Fault) -> String {
         Fault::RegexWithoutPattern => "a regex hunk needs '-' lines holding its pattern".to_owned(),
         Fault::RegexWithContext => "a regex hunk holds '-' pattern lines and '+' replacement lines alone".to_owned(),
         Fault::RegexInvalid { message } => format!("the pattern does not compile: {message}"),
+        Fault::InlineWithoutText => {
+            "an inline hunk needs '-' lines holding the text to find".to_owned()
+        }
+        Fault::InlineWithContext => {
+            "an inline hunk holds '-' text lines and '+' replacement lines alone".to_owned()
+        }
         Fault::OnlyAddedLines => "this hunk holds '+' lines alone".to_owned(),
         Fault::AppendEmpty => "the append adds no line".to_owned(),
         Fault::JsonlInvalid { message } => format!("the line is not JSON: {message}"),
@@ -209,6 +221,13 @@ fn near_miss(near: &NearMiss) -> String {
         }
         NearMiss::AfterElision { file_line } => format!(
             "  closest: the lines above `~` match from file line {file_line}, and the lines below it are not found after them\n"
+        ),
+        NearMiss::Diverges {
+            file_line,
+            expected,
+            found,
+        } => format!(
+            "  closest: the hunk's text matches the file up to line {file_line}, where they part\n    hunk: {expected:?}\n    file: {found:?}\n"
         ),
     }
 }

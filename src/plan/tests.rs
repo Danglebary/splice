@@ -307,6 +307,124 @@ mod given_a_regex_hunk {
     }
 }
 
+mod given_an_inline_hunk {
+    use super::*;
+
+    #[test]
+    fn when_planned_matching_once_mid_line_then_only_that_text_changes() {
+        let text = applied(
+            "The store keeps every event.\n",
+            "@@ inline\n-keeps every event\n+keeps every event in order\n",
+        );
+
+        assert_eq!(text, "The store keeps every event in order.\n");
+    }
+
+    #[test]
+    fn when_planned_with_text_holding_regex_characters_then_it_matches_literally() {
+        let text = applied("let y = f(x) * $1.0;\n", "@@ inline\n-f(x) * $1.0\n+g(x)\n");
+
+        assert_eq!(text, "let y = g(x);\n");
+    }
+
+    #[test]
+    fn when_planned_holding_all_then_every_occurrence_changes() {
+        let text = applied("a cat, a cat\nthe cat\n", "@@ inline all\n-cat\n+dog\n");
+
+        assert_eq!(text, "a dog, a dog\nthe dog\n");
+    }
+
+    #[test]
+    fn when_planned_holding_count_two_over_two_occurrences_then_both_change() {
+        let text = applied("x.a + x.a\n", "@@ inline count 2\n-x.a\n+y.b\n");
+
+        assert_eq!(text, "y.b + y.b\n");
+    }
+
+    #[test]
+    fn when_planned_once_over_two_occurrences_then_it_is_refused_naming_their_lines() {
+        let reasons = refused(Some("cat\nthe cat\n"), "@@ inline\n-cat\n+dog\n");
+
+        assert_eq!(
+            reasons,
+            vec![Reason::Count {
+                expected: Expectation::Once,
+                found: 2,
+                found_lines: vec![1, 2],
+                near_miss: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn when_planned_once_over_overlapping_occurrences_then_it_is_refused_as_ambiguous() {
+        let reasons = refused(Some("aaa\n"), "@@ inline\n-aa\n+b\n");
+
+        assert!(matches!(
+            reasons.as_slice(),
+            [Reason::Count { found: 2, .. }]
+        ));
+    }
+
+    #[test]
+    fn when_planned_with_text_spanning_lines_then_the_lines_join_at_the_line_break() {
+        let text = applied("one two\nthree four\n", "@@ inline\n-two\n-three\n+2\n+3\n");
+
+        assert_eq!(text, "one 2\n3 four\n");
+    }
+
+    #[test]
+    fn when_planned_with_text_spanning_lines_of_a_crlf_file_then_the_lines_join_at_crlf() {
+        let text = applied("a b\r\nc d\r\n", "@@ inline\n-b\n-c\n+B\n+C\n");
+
+        assert_eq!(text, "a B\r\nC d\r\n");
+    }
+
+    #[test]
+    fn when_planned_with_no_added_line_then_the_text_is_removed() {
+        let text = applied("keep this, drop this.\n", "@@ inline\n-, drop this\n");
+
+        assert_eq!(text, "keep this.\n");
+    }
+
+    #[test]
+    fn when_planned_against_a_misquoted_word_then_the_near_miss_shows_both_from_where_they_part() {
+        let reasons = refused(
+            Some("The store keeps every event in its log.\n"),
+            "@@ inline\n-keeps every evnt in its log\n+x\n",
+        );
+
+        assert_eq!(
+            reasons,
+            vec![Reason::Count {
+                expected: Expectation::Once,
+                found: 0,
+                found_lines: Vec::new(),
+                near_miss: Some(NearMiss::Diverges {
+                    file_line: 1,
+                    expected: "nt in its log".to_owned(),
+                    found: "ent in its log.\n".to_owned(),
+                }),
+            }]
+        );
+    }
+
+    #[test]
+    fn when_planned_against_text_sharing_too_short_a_prefix_then_no_near_miss_is_named() {
+        let reasons = refused(Some("abc\n"), "@@ inline\n-xyz123\n+q\n");
+
+        assert_eq!(
+            reasons,
+            vec![Reason::Count {
+                expected: Expectation::Once,
+                found: 0,
+                found_lines: Vec::new(),
+                near_miss: None,
+            }]
+        );
+    }
+}
+
 mod given_an_append_hunk {
     use super::*;
 

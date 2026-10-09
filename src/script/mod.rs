@@ -40,6 +40,14 @@ pub enum Operation {
         replacement: String,
         expectation: Expectation,
     },
+    /// Matches the `old` lines, joined at the file's own line break, as text anywhere in
+    /// the file, mid-line included, and replaces each match with the `new` lines joined
+    /// the same way.
+    Inline {
+        old: Vec<String>,
+        new: Vec<String>,
+        expectation: Expectation,
+    },
     /// Adds the lines at the end of an existing file.
     Append { lines: Vec<String> },
     /// Writes a file that does not exist yet, holding the lines.
@@ -93,6 +101,8 @@ pub enum Fault {
     RegexWithoutPattern,
     RegexWithContext,
     RegexInvalid { message: String },
+    InlineWithoutText,
+    InlineWithContext,
     OnlyAddedLines,
     AppendEmpty,
     JsonlInvalid { message: String },
@@ -184,6 +194,7 @@ enum Entry<'t> {
 enum Header {
     Literal(Expectation),
     Regex(Expectation),
+    Inline(Expectation),
     Append { jsonl: bool },
     Create,
 }
@@ -355,6 +366,9 @@ fn parse_header(text: &str) -> Result<Header, Fault> {
         ["regex"] => Ok(Header::Regex(Expectation::Once)),
         ["regex", "all"] => Ok(Header::Regex(Expectation::All)),
         ["regex", "count", word] => Ok(Header::Regex(count(word)?)),
+        ["inline"] => Ok(Header::Inline(Expectation::Once)),
+        ["inline", "all"] => Ok(Header::Inline(Expectation::All)),
+        ["inline", "count", word] => Ok(Header::Inline(count(word)?)),
         ["append"] => Ok(Header::Append { jsonl: false }),
         ["append", "jsonl"] => Ok(Header::Append { jsonl: true }),
         ["create"] => Ok(Header::Create),
@@ -392,6 +406,7 @@ fn build(draft: HunkDraft<'_>) -> Result<Hunk, ScriptError> {
     let operation = match draft.header {
         Header::Literal(expectation) => build_literal(draft.line, &body, expectation)?,
         Header::Regex(expectation) => build_regex(draft.line, &body, expectation)?,
+        Header::Inline(expectation) => build_inline(draft.line, &body, expectation)?,
         Header::Append { jsonl } => {
             let lines = build_added(&body)?;
             if lines.is_empty() {
@@ -519,6 +534,45 @@ fn build_regex(
     Ok(Operation::Regex {
         pattern,
         replacement: replacement_lines.join("\n"),
+        expectation,
+    })
+}
+
+fn build_inline(
+    header_line: usize,
+    body: &[(usize, Entry<'_>)],
+    expectation: Expectation,
+) -> Result<Operation, ScriptError> {
+    let mut old = Vec::new();
+    let mut new = Vec::new();
+    for (line, entry) in body {
+        match entry {
+            Entry::Remove(text) => old.push((*text).to_owned()),
+            Entry::Add(text) => new.push((*text).to_owned()),
+            Entry::Blank | Entry::Context(_) | Entry::Elision => {
+                return Err(ScriptError {
+                    line: *line,
+                    fault: Fault::InlineWithContext,
+                });
+            }
+        }
+    }
+    if old.join("\n").is_empty() {
+        return Err(ScriptError {
+            line: header_line,
+            fault: Fault::InlineWithoutText,
+        });
+    }
+    if old == new {
+        return Err(ScriptError {
+            line: header_line,
+            fault: Fault::ChangesNothing,
+        });
+    }
+    assert!(!old.is_empty(), "an inline hunk holds text to match");
+    Ok(Operation::Inline {
+        old,
+        new,
         expectation,
     })
 }

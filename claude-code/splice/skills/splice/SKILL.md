@@ -5,7 +5,7 @@ description: Edit files from Bash with `splice` instead of sed -i, perl -i, awk,
 
 # Editing with splice
 
-`splice` reads an edit script on stdin and applies every hunk to every file, or writes nothing at all. It matches text literally, line by line, so nothing in the script is ever escaped, and it checks each hunk's match count before it writes. It prints nothing on success; its exit code is the result.
+`splice` reads an edit script on stdin and applies every hunk to every file, or writes nothing at all. It matches text literally, by whole lines or, under `@@ inline`, anywhere within a line, so nothing in the script is ever escaped, and it checks each hunk's match count before it writes. It prints nothing on success; its exit code is the result.
 
 Use it for any edit made from Bash. The Edit tool stays fine for a single change to a file you have open; reach for splice when the edit is a batch, belongs in the same call as its check, or is anchored by line number or by markers. Never edit a file through `sed -i`, `perl -i`, `awk -i inplace`, or a Python or Node write: the hook blocks those commands.
 
@@ -40,6 +40,7 @@ EOF
 | `@@ count N` | exactly N matches |
 | `@@ line N` | the match starts at line N; use the line a compiler error names |
 | `@@ regex`, `@@ regex all`, `@@ regex count N` | `-` lines join into one regex, `+` lines into its replacement (`$1`, `${name}`, `$$` for `$`) |
+| `@@ inline`, `@@ inline all`, `@@ inline count N` | `-` lines join into text found anywhere, mid-line included, and `+` lines into what replaces it; no context lines |
 | `@@ append`, `@@ append jsonl` | `+` lines added at the end; `jsonl` checks each line parses as JSON |
 | `@@ create` | `+` lines written to a file that does not exist yet |
 
@@ -74,6 +75,15 @@ Delete a whole function by its first and last lines:
 -fn retired() {
 ~
 -}
+```
+
+Change a phrase inside a long line, such as a paragraph kept on one line or a JSON payload on one line, without restating the line:
+
+```
+=== docs/guide.md
+@@ inline
+-the store keeps every event
++the store keeps every event in order
 ```
 
 Rename across files, with the files listed and the expectation stated:
@@ -117,6 +127,6 @@ Exit 1 means a hunk did not match as declared and nothing was written; exit 2 me
 
 ## Leave to other tools
 
-- A structural JSON or YAML edit (set a key, filter an array): `jq`/`yq` into a temporary file and `mv` it back. splice matches text, not structure.
+- A structural JSON or YAML edit (set a key, filter an array): `jq`/`yq` into a temporary file and `mv` it back. splice matches text, not structure; a phrase inside a JSON string is text, and `@@ inline` changes it.
 - Saving command output to a file: a redirect, as always.
 - A whole new file: the Write tool, or `@@ create` when it belongs in the same batch.
