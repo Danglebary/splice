@@ -1,0 +1,16 @@
+{
+  "description": "Blocks a Bash command that edits a file through sed -i, perl -i, awk -i inplace, a Python or Node write, or a rewrite moved over the original, and hands the agent a splice example in its place.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "splice guard"
+          }
+        ]
+      }
+    ]
+  }
+}

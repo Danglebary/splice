@@ -1,0 +1,14 @@
+{
+  "name": "splice",
+  "description": "The splice plugin for Claude Code.",
+  "owner": {
+    "name": "Danglebary"
+  },
+  "plugins": [
+    {
+      "name": "splice",
+      "source": "./claude-code/splice",
+      "description": "A skill teaching agents to edit files with the splice binary, and a hook blocking edits through sed -i, perl -i, awk -i inplace, and Python or Node file writes."
+    }
+  ]
+}

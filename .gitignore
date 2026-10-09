@@ -1,0 +1,13 @@
+.DS_Store
+
+# Claude Code's per-machine settings: the permissions one user granted on one machine.
+.claude/settings.local.json
+
+# Cargo build artifacts
+target/
+
+# direnv keeps its evaluation cache for the flake here.
+.direnv/
+
+# The flake's build output link.
+result

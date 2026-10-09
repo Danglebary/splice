@@ -1,0 +1,6 @@
+# The one pin of the compiler. The flake reads this file for its shell and its package,
+# and rustup reads it in CI, so a local gate and a release build run the same release.
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"
