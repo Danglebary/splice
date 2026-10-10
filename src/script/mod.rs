@@ -4,6 +4,8 @@
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 
+use regex::Regex;
+
 /// A parsed script: the files it edits, in the order it names them, each with its hunks.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Script {
@@ -36,7 +38,7 @@ pub enum Operation {
     /// Matches `pattern` over the whole text and replaces each match with `replacement`,
     /// whose `$1` and `${name}` expand to the match's groups.
     Regex {
-        pattern: String,
+        pattern: Pattern,
         replacement: String,
         expectation: Expectation,
     },
@@ -53,6 +55,51 @@ pub enum Operation {
     /// Writes a file that does not exist yet, holding the lines.
     Create { lines: Vec<String> },
 }
+
+/// A regex hunk's pattern, compiled once as the script is parsed. Two patterns are equal
+/// when their source text is.
+#[derive(Debug)]
+pub struct Pattern {
+    regex: Regex,
+}
+
+impl Pattern {
+    /// Compiles `source` under the regex crate's default options.
+    ///
+    /// # Errors
+    ///
+    /// Returns the compiler's error when `source` is not a valid pattern.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the compiled pattern does not hold `source` as its text, which the
+    /// regex crate never does.
+    pub fn compile(source: &str) -> Result<Self, regex::Error> {
+        let regex = Regex::new(source)?;
+        assert_eq!(
+            regex.as_str(),
+            source,
+            "a compiled pattern keeps its source text, which equality compares"
+        );
+        Ok(Self { regex })
+    }
+
+    /// The compiled pattern.
+    #[must_use]
+    pub const fn regex(&self) -> &Regex {
+        &self.regex
+    }
+}
+
+impl PartialEq for Pattern {
+    // Every pattern compiles from its source under the same default options, so equal
+    // source text means the two match alike.
+    fn eq(&self, other: &Self) -> bool {
+        self.regex.as_str() == other.regex.as_str()
+    }
+}
+
+impl Eq for Pattern {}
 
 /// One line of a literal hunk's block.
 #[derive(Debug, PartialEq, Eq)]
@@ -522,18 +569,22 @@ fn build_regex(
             fault: Fault::RegexWithoutPattern,
         });
     }
-    let pattern = pattern_lines.join("\n");
-    if let Err(error) = regex::Regex::new(&pattern) {
-        return Err(ScriptError {
-            line: header_line,
-            fault: Fault::RegexInvalid {
-                message: error.to_string(),
-            },
-        });
-    }
+    let source = pattern_lines.join("\n");
+    let pattern = match Pattern::compile(&source) {
+        Ok(pattern) => pattern,
+        Err(error) => {
+            return Err(ScriptError {
+                line: header_line,
+                fault: Fault::RegexInvalid {
+                    message: error.to_string(),
+                },
+            });
+        }
+    };
+    let replacement = replacement_lines.join("\n");
     Ok(Operation::Regex {
         pattern,
-        replacement: replacement_lines.join("\n"),
+        replacement,
         expectation,
     })
 }

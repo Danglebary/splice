@@ -346,7 +346,7 @@ mod given_a_regex_hunk {
         assert_eq!(
             script.sections[0].hunks[0].operation,
             Operation::Regex {
-                pattern: "fn (\\w+)\\(".to_owned(),
+                pattern: Pattern::compile("fn (\\w+)\\(").unwrap(),
                 replacement: "pub fn $1(".to_owned(),
                 expectation: Expectation::All,
             }
@@ -375,6 +375,18 @@ mod given_a_regex_hunk {
             fault_of("=== a\n@@ regex\n+z\n"),
             (2, Fault::RegexWithoutPattern)
         );
+    }
+}
+
+mod given_patterns_compiled_from_different_sources {
+    use super::*;
+
+    #[test]
+    fn when_compared_then_they_differ() {
+        let digits = Pattern::compile("\\d+").unwrap();
+        let words = Pattern::compile("\\w+").unwrap();
+
+        assert_ne!(digits, words);
     }
 }
 

@@ -7,9 +7,7 @@
 
 use std::ops::Range;
 
-use regex::Regex;
-
-use crate::script::{BlockLine, Expectation, Hunk, Operation};
+use crate::script::{BlockLine, Expectation, Hunk, Operation, Pattern};
 
 /// How many match lines a refusal names; the count beside them stays exact.
 pub const FOUND_LINES_SHOWN_MAX: usize = 10;
@@ -113,7 +111,14 @@ pub fn plan(original: Option<&str>, hunks: &[Hunk]) -> Result<String, Vec<Refusa
                 pattern,
                 replacement,
                 expectation,
-            } => regex_edits(&document, pattern, replacement, *expectation),
+            } => {
+                let substitution = Substitution {
+                    pattern,
+                    replacement,
+                    expectation: *expectation,
+                };
+                regex_edits(&document, &substitution)
+            }
             Operation::Inline {
                 old,
                 new,
@@ -179,6 +184,13 @@ struct Replacement {
 struct Edit {
     hunk_line: usize,
     replacement: Replacement,
+}
+
+/// A regex hunk's operation, borrowed from its script.
+struct Substitution<'o> {
+    pattern: &'o Pattern,
+    replacement: &'o str,
+    expectation: Expectation,
 }
 
 impl<'t> Document<'t> {
@@ -614,20 +626,16 @@ fn push_line(text: &mut String, document: &Document<'_>, index: usize) {
 
 fn regex_edits(
     document: &Document<'_>,
-    pattern: &str,
-    replacement: &str,
-    expectation: Expectation,
+    substitution: &Substitution<'_>,
 ) -> Result<Vec<Replacement>, Reason> {
-    let Ok(regex) = Regex::new(pattern) else {
-        unreachable!("the parser compiled this pattern");
-    };
+    let regex = substitution.pattern.regex();
     let mut matches = Vec::new();
     for captures in regex.captures_iter(document.text) {
         let Some(whole) = captures.get(0) else {
             unreachable!("a match holds its whole span as group zero");
         };
         let mut expanded = String::new();
-        captures.expand(replacement, &mut expanded);
+        captures.expand(substitution.replacement, &mut expanded);
         let line = document.line_number_of_byte(whole.start());
         matches.push((
             line,
@@ -637,8 +645,9 @@ fn regex_edits(
             },
         ));
     }
-    choose(matches, expectation).map_err(|(found, found_lines)| Reason::Count {
-        expected: expectation,
+    let expected = substitution.expectation;
+    choose(matches, expected).map_err(|(found, found_lines)| Reason::Count {
+        expected,
         found,
         found_lines,
         near_miss: None,
