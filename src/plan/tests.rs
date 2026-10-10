@@ -154,6 +154,36 @@ mod given_a_hunk_matching_nowhere {
     }
 
     #[test]
+    fn when_planned_with_a_first_line_found_inside_a_file_line_then_the_near_miss_names_it() {
+        let reasons = refused(Some("let n = written(x);\n"), "@@\n-written(x\n+write(x\n");
+
+        assert_eq!(
+            reasons,
+            vec![Reason::Count {
+                expected: Expectation::Once,
+                found: 0,
+                found_lines: Vec::new(),
+                near_miss: Some(NearMiss::Inside { file_line: 1 }),
+            }]
+        );
+    }
+
+    #[test]
+    fn when_planned_with_a_short_first_line_found_inside_a_file_line_then_nothing_is_named() {
+        let reasons = refused(Some("data\n"), "@@\n-a\n+b\n");
+
+        assert_eq!(
+            reasons,
+            vec![Reason::Count {
+                expected: Expectation::Once,
+                found: 0,
+                found_lines: Vec::new(),
+                near_miss: None,
+            }]
+        );
+    }
+
+    #[test]
     fn when_planned_against_a_block_running_past_the_end_then_the_near_miss_finds_nothing_there() {
         let reasons = refused(Some("a\nb\n"), "@@\n a\n b\n-c\n");
 

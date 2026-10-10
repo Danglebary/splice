@@ -159,3 +159,25 @@ mod given_a_fault_an_agent_fixes_by_moving_its_added_lines {
         assert!(message.contains("never under a `+` line"));
     }
 }
+
+mod given_a_near_miss_found_inside_a_line {
+    use super::*;
+
+    #[test]
+    fn when_rendered_then_it_names_the_line_and_the_inline_header() {
+        let refusal = Refusal {
+            hunk_line: 2,
+            reason: Reason::Count {
+                expected: Expectation::Once,
+                found: 0,
+                found_lines: Vec::new(),
+                near_miss: Some(NearMiss::Inside { file_line: 7 }),
+            },
+        };
+
+        let message = super::refusal("f", &refusal);
+
+        assert!(message.contains("file line 7"));
+        assert!(message.contains("`@@ inline`"));
+    }
+}

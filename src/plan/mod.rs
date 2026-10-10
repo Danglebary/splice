@@ -64,6 +64,9 @@ pub enum NearMiss {
     /// No line matches exactly, and this one matches the hunk's first line once
     /// surrounding whitespace is ignored.
     Whitespace { file_line: usize },
+    /// No line matches exactly or up to whitespace, and this one holds the hunk's first
+    /// line inside it, which an inline hunk matches.
+    Inside { file_line: usize },
     /// The lines above the first elision match from this line, and the lines below it are
     /// found nowhere after them.
     AfterElision { file_line: usize },
@@ -80,8 +83,9 @@ pub enum NearMiss {
     },
 }
 
-/// The fewest characters an inline hunk and the file share before a divergence is named:
-/// a shorter shared start occurs almost anywhere and points nowhere useful.
+/// The fewest characters a near miss by text alone rests on, as the start an inline hunk
+/// shares with the file or the hunk line found inside a file line: a shorter text occurs
+/// almost anywhere and points nowhere useful.
 const NEAR_MISS_PREFIX_CHARS_MIN: usize = 8;
 
 /// How many characters of each side a diverging near miss shows.
@@ -857,7 +861,20 @@ fn near_miss(document: &Document<'_>, segments: &[Vec<&str>]) -> Option<NearMiss
             .content(*index)
             .is_some_and(|content| content.trim() == target)
     });
-    similar.map(|index| NearMiss::Whitespace {
+    if let Some(index) = similar {
+        return Some(NearMiss::Whitespace {
+            file_line: after(index),
+        });
+    }
+    if target.chars().count() < NEAR_MISS_PREFIX_CHARS_MIN {
+        return None;
+    }
+    let holding = (0..document.line_count()).find(|index| {
+        document
+            .content(*index)
+            .is_some_and(|content| content.contains(target))
+    });
+    holding.map(|index| NearMiss::Inside {
         file_line: after(index),
     })
 }

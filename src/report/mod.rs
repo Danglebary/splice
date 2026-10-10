@@ -246,6 +246,11 @@ fn near_miss(near: &NearMiss) -> String {
                 "  closest: file line {file_line} matches the hunk's first line except for surrounding whitespace\n"
             )
         }
+        NearMiss::Inside { file_line } => {
+            format!(
+                "  closest: file line {file_line} holds the hunk's first line inside it; `@@ inline` matches text mid-line\n"
+            )
+        }
         NearMiss::AfterElision { file_line } => format!(
             "  closest: the lines above `~` match from file line {file_line}, and the lines below it are not found after them\n"
         ),
