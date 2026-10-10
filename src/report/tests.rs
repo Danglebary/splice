@@ -72,6 +72,39 @@ mod given_a_near_miss_differing_in_whitespace {
     }
 }
 
+mod given_a_refusal_whose_hunks_only_add_a_final_newline {
+    use super::*;
+
+    #[test]
+    fn when_rendered_then_it_names_the_header_that_adds_one() {
+        let refusal = Refusal {
+            hunk_line: 2,
+            reason: Reason::OnlyAddsFinalNewline,
+        };
+
+        assert!(super::refusal("f", &refusal).contains("`@@ final newline`"));
+    }
+}
+
+mod given_a_near_miss_at_a_line_ending_in_a_carriage_return {
+    use super::*;
+
+    #[test]
+    fn when_rendered_then_it_names_the_header_that_matches_the_text_before_it() {
+        let refusal = Refusal {
+            hunk_line: 2,
+            reason: Reason::Count {
+                expected: Expectation::Once,
+                found: 0,
+                found_lines: Vec::new(),
+                near_miss: Some(NearMiss::CarriageReturn { file_line: 1 }),
+            },
+        };
+
+        assert!(super::refusal("f", &refusal).contains("`@@ inline`"));
+    }
+}
+
 mod given_a_script_error {
     use super::*;
 

@@ -42,6 +42,13 @@ pub enum Reason {
         other_hunk_line: usize,
     },
     Unchanged,
+    /// A `final newline` hunk found the file already ending in one.
+    FinalNewlinePresent,
+    /// The file's hunks together change only its missing final newline, which a file
+    /// keeps missing unless a `final newline` hunk adds it.
+    OnlyAddsFinalNewline,
+    /// The file's hunks each change it, and together leave it as it was.
+    CancelsOut,
 }
 
 /// The closest the file came to a hunk that matched nowhere, so the next attempt can be
@@ -60,6 +67,10 @@ pub enum NearMiss {
     /// The lines above the first elision match from this line, and the lines below it are
     /// found nowhere after them.
     AfterElision { file_line: usize },
+    /// This line holds the hunk's line followed by a carriage return, which a hunk line
+    /// cannot hold: a file that mixes CRLF and LF line endings keeps each `\r` as part of
+    /// its line.
+    CarriageReturn { file_line: usize },
     /// The longest start of an inline hunk's text the file holds runs up to this line,
     /// and `expected` and `found` are the two texts from where they part.
     Diverges {
@@ -80,65 +91,37 @@ const NEAR_MISS_SNIPPET_CHARS_MAX: usize = 40;
 ///
 /// # Errors
 ///
-/// Returns every refusal when any hunk cannot apply as declared; nothing is applied then.
+/// Returns every refusal when any hunk cannot apply as declared, or when the hunks
+/// together would leave the text as it was; nothing is applied then.
 ///
 /// # Panics
 ///
 /// Panics when `hunks` is empty, which no parsed script produces.
 pub fn plan(original: Option<&str>, hunks: &[Hunk]) -> Result<String, Vec<Refusal>> {
-    assert!(
-        !hunks.is_empty(),
-        "a file is planned with at least one hunk"
-    );
+    let Some(first) = hunks.first() else {
+        unreachable!("a file is planned with at least one hunk");
+    };
     let Some(text) = original else {
         return plan_missing(hunks);
     };
     let document = Document::new(text);
     let mut edits: Vec<Edit> = Vec::new();
     let mut appended: Vec<&str> = Vec::new();
+    let mut final_newline = false;
     let mut refusals: Vec<Refusal> = Vec::new();
     for hunk in hunks {
-        let outcome = match &hunk.operation {
-            Operation::Create { .. } => Err(Reason::Exists),
-            Operation::Append { lines } => {
-                appended.extend(lines.iter().map(String::as_str));
-                Ok(Vec::new())
-            }
-            Operation::Literal { block, expectation } => {
-                literal_edits(&document, block, *expectation)
-            }
-            Operation::Regex {
-                pattern,
-                replacement,
-                expectation,
-            } => {
-                let substitution = Substitution {
-                    pattern,
-                    replacement,
-                    expectation: *expectation,
-                };
-                regex_edits(&document, &substitution)
-            }
-            Operation::Inline {
-                old,
-                new,
-                expectation,
-            } => inline_edits(&document, old, new, *expectation),
-        };
-        match outcome {
-            Ok(replacements) if unchanged(text, &replacements) => {
-                refusals.push(Refusal {
-                    hunk_line: hunk.line,
-                    reason: Reason::Unchanged,
-                });
-            }
-            Ok(replacements) => {
+        match contribution(&document, &hunk.operation) {
+            Ok(Contribution::Replacements(replacements)) => {
                 let tagged = replacements.into_iter().map(|replacement| Edit {
                     hunk_line: hunk.line,
                     replacement,
                 });
                 edits.extend(tagged);
             }
+            Ok(Contribution::Appended(lines)) => {
+                appended.extend(lines.iter().map(String::as_str));
+            }
+            Ok(Contribution::FinalNewline) => final_newline = true,
             Err(reason) => refusals.push(Refusal {
                 hunk_line: hunk.line,
                 reason,
@@ -156,9 +139,74 @@ pub fn plan(original: Option<&str>, hunks: &[Hunk]) -> Result<String, Vec<Refusa
     if !refusals.is_empty() {
         return Err(refusals);
     }
-    let planned = assemble(&document, &edits, &appended);
-    assert_ne!(planned, text, "a plan with no refusal changes the text");
+    let spliced = assemble(&document, &edits, &appended);
+    let spliced_unchanged = spliced == text;
+    let planned = end_as_declared(&document, spliced, final_newline);
+    if planned == text {
+        assert!(
+            !final_newline,
+            "a final newline hunk changes a file that lacks one"
+        );
+        let reason = if spliced_unchanged {
+            Reason::CancelsOut
+        } else {
+            Reason::OnlyAddsFinalNewline
+        };
+        return Err(vec![Refusal {
+            hunk_line: first.line,
+            reason,
+        }]);
+    }
     Ok(planned)
+}
+
+/// What one hunk adds to its file's plan.
+enum Contribution<'h> {
+    Replacements(Vec<Replacement>),
+    Appended(&'h [String]),
+    FinalNewline,
+}
+
+fn contribution<'h>(
+    document: &Document<'_>,
+    operation: &'h Operation,
+) -> Result<Contribution<'h>, Reason> {
+    let replacements = match operation {
+        Operation::Create { .. } => return Err(Reason::Exists),
+        Operation::Append { lines } => return Ok(Contribution::Appended(lines)),
+        Operation::FinalNewline => {
+            if document.text.ends_with('\n') {
+                return Err(Reason::FinalNewlinePresent);
+            }
+            return Ok(Contribution::FinalNewline);
+        }
+        Operation::Literal { block, expectation } => literal_edits(document, block, *expectation)?,
+        Operation::Regex {
+            pattern,
+            replacement,
+            expectation,
+        } => {
+            let substitution = Substitution {
+                pattern,
+                replacement,
+                expectation: *expectation,
+            };
+            regex_edits(document, &substitution)?
+        }
+        Operation::Inline {
+            old,
+            new,
+            expectation,
+        } => inline_edits(document, old, new, *expectation)?,
+    };
+    assert!(
+        !replacements.is_empty(),
+        "a matched hunk replaces at least one span"
+    );
+    if unchanged(document.text, &replacements) {
+        return Err(Reason::Unchanged);
+    }
+    Ok(Contribution::Replacements(replacements))
 }
 
 /// A file's text split into lines, each line's terminator kept apart from its content.
@@ -189,7 +237,7 @@ struct Edit {
 /// A regex hunk's operation, borrowed from its script.
 struct Substitution<'o> {
     pattern: &'o Pattern,
-    replacement: &'o str,
+    replacement: &'o [String],
     expectation: Expectation,
 }
 
@@ -320,10 +368,9 @@ fn plan_missing(hunks: &[Hunk]) -> Result<String, Vec<Refusal>> {
 }
 
 fn unchanged(text: &str, replacements: &[Replacement]) -> bool {
-    !replacements.is_empty()
-        && replacements.iter().all(|replacement| {
-            text.get(replacement.range.clone()) == Some(replacement.text.as_str())
-        })
+    replacements
+        .iter()
+        .all(|replacement| text.get(replacement.range.clone()) == Some(replacement.text.as_str()))
 }
 
 /// Edits arrive sorted by where they start; an edit starting inside the one before it
@@ -374,7 +421,19 @@ fn assemble(document: &Document<'_>, edits: &[Edit], appended: &[&str]) -> Strin
             output.push_str(document.eol);
         }
     }
-    if document.lacks_final_newline() {
+    output
+}
+
+/// The spliced text with its end as the hunks declare: a file lacking a final newline
+/// keeps lacking one unless a `final newline` hunk adds it.
+fn end_as_declared(document: &Document<'_>, spliced: String, final_newline: bool) -> String {
+    let mut output = spliced;
+    if final_newline {
+        if !output.ends_with('\n') {
+            output.push_str(document.eol);
+        }
+        assert!(output.ends_with('\n'), "a final newline ends the text");
+    } else if document.lacks_final_newline() {
         if let Some(kept) = output.strip_suffix(document.eol) {
             output.truncate(kept.len());
         }
@@ -629,13 +688,14 @@ fn regex_edits(
     substitution: &Substitution<'_>,
 ) -> Result<Vec<Replacement>, Reason> {
     let regex = substitution.pattern.regex();
+    let replacement = substitution.replacement.join(document.eol);
     let mut matches = Vec::new();
     for captures in regex.captures_iter(document.text) {
         let Some(whole) = captures.get(0) else {
             unreachable!("a match holds its whole span as group zero");
         };
         let mut expanded = String::new();
-        captures.expand(substitution.replacement, &mut expanded);
+        captures.expand(&replacement, &mut expanded);
         let line = document.line_number_of_byte(whole.start());
         matches.push((
             line,
@@ -768,14 +828,27 @@ fn near_miss(document: &Document<'_>, segments: &[Vec<&str>]) -> Option<NearMiss
         let Some(expected) = leading.get(matched) else {
             unreachable!("a partial match stops inside the segment");
         };
-        let found = document.content(differing).map(str::to_owned);
+        let found = document.content(differing);
+        if carriage_return_after(found, expected) {
+            return Some(NearMiss::CarriageReturn {
+                file_line: after(differing),
+            });
+        }
         return Some(NearMiss::Differs {
             file_line: after(differing),
             expected: (*expected).to_owned(),
-            found,
+            found: found.map(str::to_owned),
         });
     }
-    let target = leading.first()?.trim();
+    let first = leading.first()?;
+    let returned = (0..document.line_count())
+        .find(|index| carriage_return_after(document.content(*index), first));
+    if let Some(index) = returned {
+        return Some(NearMiss::CarriageReturn {
+            file_line: after(index),
+        });
+    }
+    let target = first.trim();
     if target.is_empty() {
         return None;
     }
@@ -787,6 +860,11 @@ fn near_miss(document: &Document<'_>, segments: &[Vec<&str>]) -> Option<NearMiss
     similar.map(|index| NearMiss::Whitespace {
         file_line: after(index),
     })
+}
+
+/// Whether a file line's `content` is `expected` followed by a carriage return.
+fn carriage_return_after(content: Option<&str>, expected: &str) -> bool {
+    content.and_then(|text| text.strip_suffix('\r')) == Some(expected)
 }
 
 #[cfg(test)]

@@ -54,21 +54,25 @@ Headers:
                          ($1, ${name}; $$ for a literal $)
   @@ append [jsonl]      '+' lines added at the end; jsonl checks each line is JSON
   @@ create              '+' lines written to a file that does not exist yet
+  @@ final newline       ends the last line of a file that lacks a final newline
 
 Matching is literal and by whole lines, except under inline, which matches text
-anywhere and joins its lines at the file's own line break, and regex. Every hunk
-matches the file as it was before any hunk applied, so line numbers stay valid across
-a batch and hunks must not overlap. A hunk that would leave its file unchanged is
-refused. Blank lines at a hunk's edges are dropped; write a lone space for a blank
-context line there.
+anywhere and joins its lines at the file's own line break, and regex, whose '+' lines
+join at that line break too. Every hunk matches the file as it was before any hunk
+applied, so line numbers stay valid across a batch and hunks must not overlap. A hunk
+that would leave its file unchanged is refused, and so are hunks that together would.
+A file that lacks a final newline keeps lacking one unless `@@ final newline` adds it.
+Blank lines at a hunk's edges are dropped; write a lone space for a blank context line
+there.
 
 Exit status:
   0  every file written
   1  refused: a hunk did not match as declared, and nothing was written
   2  the script or the arguments are malformed, and nothing was written
-  3  reading or writing a file failed
+  3  reading or writing a file failed; stderr names any file left changed
   Under try: the command's own status; with --expect-fail, 0 when the command failed
-  and 4 when it passed.
+  and 4 when it passed. Interrupted, 128 plus the signal's number, whatever the
+  command did.
 ";
 
 pub const NOTHING_WRITTEN: &str = "splice: nothing written\n";
@@ -97,7 +101,7 @@ fn fault(fault: &Fault) -> String {
         Fault::UnknownHeader { header } => format!(
             "unknown header `@@ {header}`; expected `@@`, `@@ all`, `@@ count N`, `@@ line N`, \
              `@@ inline [all|count N]`, `@@ regex [all|count N]`, `@@ append [jsonl]`, \
-             or `@@ create`"
+             `@@ create`, or `@@ final newline`"
         ),
         Fault::InvalidNumber { word } => format!("`{word}` is not a whole number of 1 or more"),
         Fault::UnexpectedLine => {
@@ -123,6 +127,7 @@ fn fault(fault: &Fault) -> String {
         Fault::AppendEmpty => "the append adds no line".to_owned(),
         Fault::JsonlInvalid { message } => format!("the line is not JSON: {message}"),
         Fault::CreateNotAlone => "`@@ create` is the only hunk for its file".to_owned(),
+        Fault::FinalNewlineWithLines => "`@@ final newline` holds no lines".to_owned(),
     }
 }
 
@@ -174,6 +179,17 @@ fn reason(reason: &Reason) -> String {
         Reason::Unchanged => {
             "the replacement equals the matched text, so the hunk changes nothing".to_owned()
         }
+        Reason::FinalNewlinePresent => {
+            "the file already ends in a newline, so `@@ final newline` changes nothing".to_owned()
+        }
+        Reason::OnlyAddsFinalNewline => {
+            "the hunks change only the file's missing final newline, which splice keeps \
+             missing; `@@ final newline` adds one"
+                .to_owned()
+        }
+        Reason::CancelsOut => {
+            "the file's hunks each change it, and together leave it as it was".to_owned()
+        }
     }
 }
 
@@ -222,6 +238,9 @@ fn near_miss(near: &NearMiss) -> String {
         NearMiss::AfterElision { file_line } => format!(
             "  closest: the lines above `~` match from file line {file_line}, and the lines below it are not found after them\n"
         ),
+        NearMiss::CarriageReturn { file_line } => format!(
+            "  closest: file line {file_line} holds the hunk's line and then a carriage return; the file mixes CRLF and LF line endings, so the `\\r` is part of the line, which a hunk line cannot hold, and `@@ inline` matches the text before it\n"
+        ),
         NearMiss::Diverges {
             file_line,
             expected,
@@ -256,27 +275,19 @@ pub fn io_failure(path: &str, error: &std::io::Error) -> String {
     format!("splice: {path}: {error}\n")
 }
 
-/// The files a failed batch wrote before the failure, the one it failed on, and those it
-/// never reached, so the state of the tree is stated rather than guessed.
 #[must_use]
-pub fn write_failure(
-    written: &[&str],
-    failed: &str,
-    error: &std::io::Error,
-    unwritten: &[&str],
-) -> String {
-    let mut message = format!("splice: {failed}: could not write: {error}\n");
-    if !written.is_empty() {
-        message.push_str("splice: already written: ");
-        message.push_str(&written.join(", "));
-        message.push('\n');
-    }
-    if !unwritten.is_empty() {
-        message.push_str("splice: not written: ");
-        message.push_str(&unwritten.join(", "));
-        message.push('\n');
-    }
-    message
+pub fn write_failure(path: &str, error: &std::io::Error) -> String {
+    format!("splice: {path}: could not write: {error}\n")
+}
+
+#[must_use]
+pub fn temporary_remains(path: &str, error: &std::io::Error) -> String {
+    format!("splice: {path}: could not remove this temporary file: {error}\n")
+}
+
+#[must_use]
+pub fn directory_remains(path: &str, error: &std::io::Error) -> String {
+    format!("splice: {path}: could not remove this directory splice made: {error}\n")
 }
 
 #[must_use]

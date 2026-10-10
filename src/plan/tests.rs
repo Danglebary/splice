@@ -171,6 +171,36 @@ mod given_a_hunk_matching_nowhere {
             }]
         );
     }
+
+    #[test]
+    fn when_planned_against_a_line_ending_in_a_carriage_return_then_the_near_miss_names_it() {
+        let reasons = refused(Some("a\r\nb\nc\r\n"), "@@\n-a\n+A\n");
+
+        assert_eq!(
+            reasons,
+            vec![Reason::Count {
+                expected: Expectation::Once,
+                found: 0,
+                found_lines: Vec::new(),
+                near_miss: Some(NearMiss::CarriageReturn { file_line: 1 }),
+            }]
+        );
+    }
+
+    #[test]
+    fn when_planned_against_a_later_line_ending_in_a_carriage_return_then_the_near_miss_names_it() {
+        let reasons = refused(Some("a\nb\r\nc\n"), "@@\n a\n-b\n+B\n");
+
+        assert_eq!(
+            reasons,
+            vec![Reason::Count {
+                expected: Expectation::Once,
+                found: 0,
+                found_lines: Vec::new(),
+                near_miss: Some(NearMiss::CarriageReturn { file_line: 2 }),
+            }]
+        );
+    }
 }
 
 mod given_hunks_declaring_how_many_matches {
@@ -365,6 +395,13 @@ mod given_a_regex_hunk {
 
         assert_eq!(reasons, vec![Reason::Unchanged]);
     }
+
+    #[test]
+    fn when_planned_with_a_replacement_spanning_lines_of_a_crlf_file_then_the_lines_join_at_crlf() {
+        let text = applied("x\r\ny\r\n", "@@ regex\n-x\n+x\n+inserted\n");
+
+        assert_eq!(text, "x\r\ninserted\r\ny\r\n");
+    }
 }
 
 mod given_an_inline_hunk {
@@ -554,5 +591,72 @@ mod given_several_hunks_in_one_file {
         let reasons = refused(Some("a\n"), "@@\n-x\n+y\n@@\n-z\n+w\n");
 
         assert_eq!(reasons.len(), 2);
+    }
+
+    #[test]
+    fn when_planned_with_an_insertion_and_a_removal_that_cancel_then_it_is_refused_as_cancelling_out()
+     {
+        let reasons = refused(
+            Some("use bar;\nuse foo;\n"),
+            "@@\n use bar;\n+use foo;\n@@\n-use foo;\n",
+        );
+
+        assert_eq!(reasons, vec![Reason::CancelsOut]);
+    }
+}
+
+mod given_a_file_without_a_final_newline {
+    use super::*;
+
+    #[test]
+    fn when_planned_with_final_newline_then_the_last_line_ends_in_a_newline() {
+        assert_eq!(applied("a\nb", "@@ final newline\n"), "a\nb\n");
+    }
+
+    #[test]
+    fn when_planned_with_final_newline_over_a_crlf_file_then_the_last_line_ends_in_crlf() {
+        assert_eq!(applied("a\r\nb", "@@ final newline\n"), "a\r\nb\r\n");
+    }
+
+    #[test]
+    fn when_planned_with_final_newline_beside_an_edit_to_the_last_line_then_both_apply() {
+        let text = applied("a\nb", "@@\n-b\n+B\n@@ final newline\n");
+
+        assert_eq!(text, "a\nB\n");
+    }
+
+    #[test]
+    fn when_planned_with_final_newline_beside_an_append_then_the_appended_line_ends_in_one() {
+        assert_eq!(applied("a", "@@ append\n+b\n@@ final newline\n"), "a\nb\n");
+    }
+
+    #[test]
+    fn when_planned_with_a_hunk_whose_one_change_is_a_final_newline_then_it_is_refused_naming_that()
+    {
+        assert_eq!(
+            refused(Some("a"), "@@\n-a\n+a\n"),
+            vec![Reason::OnlyAddsFinalNewline]
+        );
+    }
+}
+
+mod given_a_file_ending_in_a_newline {
+    use super::*;
+
+    #[test]
+    fn when_planned_with_final_newline_then_it_is_refused_as_present() {
+        assert_eq!(
+            refused(Some("a\n"), "@@ final newline\n"),
+            vec![Reason::FinalNewlinePresent]
+        );
+    }
+}
+
+mod given_an_empty_file {
+    use super::*;
+
+    #[test]
+    fn when_planned_with_final_newline_then_the_file_holds_one_newline() {
+        assert_eq!(applied("", "@@ final newline\n"), "\n");
     }
 }

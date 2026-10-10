@@ -43,8 +43,9 @@ EOF
 | `@@ inline`, `@@ inline all`, `@@ inline count N` | `-` lines join into text found anywhere, mid-line included, and `+` lines into what replaces it; no context lines |
 | `@@ append`, `@@ append jsonl` | `+` lines added at the end; `jsonl` checks each line parses as JSON |
 | `@@ create` | `+` lines written to a file that does not exist yet |
+| `@@ final newline` | ends the last line of a file that lacks a final newline; no lines follow it |
 
-Every hunk matches the file as it was before any hunk applied, so line numbers stay valid across a batch: write hunks in any order and never adjust a line number for an earlier hunk. Two hunks may not change the same lines; merge them into one.
+Every hunk matches the file as it was before any hunk applied, so line numbers stay valid across a batch: write hunks in any order and never adjust a line number for an earlier hunk. Two hunks may not change the same lines; merge them into one. A file that lacks a final newline keeps lacking one through every edit unless `@@ final newline` adds it.
 
 ## Patterns
 
@@ -117,7 +118,7 @@ splice try --expect-fail -- cargo test -p ledger <<'EOF'
 EOF
 ```
 
-Under `--expect-fail` the exit code is 0 when the tests failed (the mutation was caught) and 4 when they passed (it survived). Without it, the command's own exit code passes through.
+Under `--expect-fail` the exit code is 0 when the tests failed (the mutation was caught) and 4 when they passed (it survived). Without it, the command's own exit code passes through. An interrupted run exits with 128 plus the signal's number, never 0, so it never passes for a caught mutation.
 
 ## When a script is refused
 

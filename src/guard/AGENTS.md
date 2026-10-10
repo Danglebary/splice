@@ -13,4 +13,4 @@
 
 `verdict` is pure and takes the command string; `hook_input` is pure and takes the raw stdin bytes; `main.rs` reads stdin under a size bound, calls both, and prints `report::guard_denial` on a block. A malformed input is a non-blocking error rather than a block, so a change in Claude Code's input shape never stops every Bash call.
 
-The verdict is deliberately narrow: in-place editors, interpreter file writes, a heredoc that is a script carrying either, and a rewrite moved over the original unless `jq` or `yq` made it. Widen it only against real commands, as `AGENTS.md` at the root says.
+The verdict is deliberately narrow: in-place editors, interpreter file writes in the interpreter's own code (its quoted words, a heredoc fed to it, or a heredoc written to the file it runs), a heredoc that is a script carrying either, and a rewrite moved over a file the command line also names, unless `jq` or `yq` made it. Widen it only against real commands, as `AGENTS.md` at the root says.

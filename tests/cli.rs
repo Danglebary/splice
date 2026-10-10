@@ -11,7 +11,9 @@ use support::{Scratch, stderr, stdout};
 #[cfg(test)]
 mod support {
     use std::fs;
+    use std::fs::Permissions;
     use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::process::{Command, Output, Stdio};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -44,6 +46,26 @@ mod support {
 
         pub fn exists(&self, name: &str) -> bool {
             self.root.join(name).exists()
+        }
+
+        pub fn directory(&self, name: &str) {
+            fs::create_dir(self.root.join(name)).unwrap();
+        }
+
+        /// Makes the directory `name` refuse new files, so a write beside a file in it fails.
+        pub fn lock(&self, name: &str) {
+            let directory = self.root.join(name);
+            fs::set_permissions(&directory, Permissions::from_mode(0o555)).unwrap();
+            assert!(
+                fs::write(directory.join("probe"), "").is_err(),
+                "a locked directory refuses a new file, which a root user is never refused"
+            );
+        }
+
+        /// Lets the directory `name` take new files again, so the scratch can be removed.
+        pub fn unlock(&self, name: &str) {
+            let directory = self.root.join(name);
+            fs::set_permissions(&directory, Permissions::from_mode(0o755)).unwrap();
         }
 
         pub fn run(&self, arguments: &[&str], stdin: &str) -> Output {
@@ -156,6 +178,17 @@ mod given_a_script_whose_hunks_all_match {
     }
 
     #[test]
+    fn when_applied_with_create_then_the_file_takes_the_mode_a_new_file_gets() {
+        let scratch = Scratch::new();
+        let reference = scratch.write("reference.txt", "");
+
+        scratch.run(&[], "=== new.txt\n@@ create\n+a\n");
+
+        let mode_of = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode_of(&scratch.root.join("new.txt")), mode_of(&reference));
+    }
+
+    #[test]
     fn when_applied_with_create_under_a_new_directory_then_the_directory_and_file_are_made() {
         let scratch = Scratch::new();
 
@@ -226,6 +259,98 @@ mod given_a_malformed_script {
     }
 }
 
+mod given_a_script_naming_a_file_that_cannot_be_written {
+    use super::*;
+
+    const SCRIPT: &str = "=== first.txt\n@@\n-x\n+X\n=== locked/second.txt\n@@\n-y\n+Y\n";
+
+    fn scratch_with_a_locked_second_file() -> Scratch {
+        let scratch = Scratch::new();
+        scratch.write("first.txt", "x\n");
+        scratch.directory("locked");
+        scratch.write("locked/second.txt", "y\n");
+        scratch.lock("locked");
+        scratch
+    }
+
+    #[test]
+    fn when_applied_then_no_file_is_written_and_it_exits_with_the_io_code() {
+        let scratch = scratch_with_a_locked_second_file();
+
+        let output = scratch.run(&[], SCRIPT);
+        scratch.unlock("locked");
+
+        assert_eq!(output.status.code(), Some(3));
+        assert_eq!(scratch.read("first.txt"), "x\n");
+        assert_eq!(scratch.read("locked/second.txt"), "y\n");
+    }
+
+    #[test]
+    fn when_tried_then_the_command_never_runs_and_no_file_is_written() {
+        let scratch = scratch_with_a_locked_second_file();
+
+        let output = scratch.run(&["try", "--", "touch", "ran"], SCRIPT);
+        scratch.unlock("locked");
+
+        assert_eq!(output.status.code(), Some(3));
+        assert!(!scratch.exists("ran"));
+        assert_eq!(scratch.read("first.txt"), "x\n");
+    }
+
+    #[test]
+    fn when_applied_beside_a_create_under_a_new_directory_then_that_directory_is_removed() {
+        let scratch = Scratch::new();
+        scratch.directory("locked");
+        scratch.write("locked/second.txt", "y\n");
+        scratch.lock("locked");
+
+        let output = scratch.run(
+            &[],
+            "=== made/new.txt\n@@ create\n+a\n=== locked/second.txt\n@@\n-y\n+Y\n",
+        );
+        scratch.unlock("locked");
+
+        assert_eq!(output.status.code(), Some(3));
+        assert!(!scratch.exists("made"));
+    }
+}
+
+mod given_a_temporary_name_already_taken {
+    use super::*;
+
+    /// As many names beside a file as splice tries for a temporary.
+    const TEMPORARY_NAMES_MAX: usize = 16;
+
+    #[test]
+    fn when_applied_with_a_link_at_the_temporary_name_then_the_link_target_is_left_alone() {
+        let scratch = Scratch::new();
+        scratch.write("a.txt", "x\n");
+        scratch.write("victim.txt", "v\n");
+        std::os::unix::fs::symlink("victim.txt", scratch.root.join(".a.txt.splice")).unwrap();
+
+        let output = scratch.run(&[], "=== a.txt\n@@\n-x\n+y\n");
+
+        assert_eq!(output.status.code(), Some(0));
+        assert_eq!(scratch.read("victim.txt"), "v\n");
+        assert_eq!(scratch.read("a.txt"), "y\n");
+    }
+
+    #[test]
+    fn when_applied_with_every_temporary_name_taken_then_nothing_is_written() {
+        let scratch = Scratch::new();
+        scratch.write("a.txt", "x\n");
+        scratch.write(".a.txt.splice", "");
+        for attempt in 1..TEMPORARY_NAMES_MAX {
+            scratch.write(&format!(".a.txt.splice-{attempt}"), "");
+        }
+
+        let output = scratch.run(&[], "=== a.txt\n@@\n-x\n+y\n");
+
+        assert_eq!(output.status.code(), Some(3));
+        assert_eq!(scratch.read("a.txt"), "x\n");
+    }
+}
+
 mod given_the_try_subcommand {
     use super::*;
 
@@ -254,6 +379,33 @@ mod given_the_try_subcommand {
 
         assert_eq!(output.status.code(), Some(0));
         assert!(!scratch.exists("new.txt"));
+    }
+
+    #[test]
+    fn when_run_then_directories_made_for_a_created_file_are_removed_after() {
+        let scratch = Scratch::new();
+
+        let output = scratch.run(
+            &["try", "--", "test", "-f", "made/deeper/new.txt"],
+            "=== made/deeper/new.txt\n@@ create\n+a\n",
+        );
+
+        assert_eq!(output.status.code(), Some(0));
+        assert!(!scratch.exists("made"));
+    }
+
+    #[test]
+    fn when_run_with_a_command_writing_into_a_made_directory_then_that_directory_stays() {
+        let scratch = Scratch::new();
+
+        let output = scratch.run(
+            &["try", "--", "touch", "made/output.txt"],
+            "=== made/new.txt\n@@ create\n+a\n",
+        );
+
+        assert_eq!(output.status.code(), Some(0));
+        assert!(!scratch.exists("made/new.txt"));
+        assert!(scratch.exists("made/output.txt"));
     }
 
     #[test]
@@ -308,6 +460,27 @@ mod given_the_try_subcommand {
 
         assert_eq!(output.status.code(), Some(1));
         assert!(!scratch.exists("ran"));
+    }
+
+    #[test]
+    fn when_run_expecting_failure_and_interrupted_then_it_exits_with_the_signal_code() {
+        let scratch = Scratch::new();
+        scratch.write("a.txt", "x\n");
+
+        let output = scratch.run(
+            &[
+                "try",
+                "--expect-fail",
+                "--",
+                "sh",
+                "-c",
+                "kill -INT $PPID; exit 1",
+            ],
+            "=== a.txt\n@@\n-x\n+y\n",
+        );
+
+        let interrupted = i32::from(splice::exit_code::SIGNAL_BASE) + signal_hook::consts::SIGINT;
+        assert_eq!(output.status.code(), Some(interrupted));
     }
 }
 

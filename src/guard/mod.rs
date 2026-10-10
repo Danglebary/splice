@@ -3,14 +3,18 @@
 //!
 //! Pure and deliberately narrow. It names the in-place editors and interpreter writes
 //! and lets everything else through, so a command that reads, or saves output to a new
-//! file, is never blocked. Quoted text, comments, and heredoc bodies are blanked before a
-//! command's words are read, so a script or a message that only mentions an editor
-//! passes; an interpreter's own code is the one place quoted text is read, since that is
-//! where its file write is written, and a heredoc fed to a shell or written to a `.sh`
-//! file is judged as a script of its own. A rewrite whose command line runs `jq` or `yq`
-//! is let through: splice matches text, not JSON structure, so a structural JSON edit
-//! stays theirs.
+//! file, is never blocked. Quoted text, comments, and heredoc bodies are lifted out before
+//! a command's words are read, each quoted string standing as a token for its text, so a
+//! script or a message that only mentions an editor passes. An interpreter's own code is
+//! the one place that text is read, since that is where its file write is written: the
+//! quoted words of the interpreter's command, a heredoc fed to it, and a heredoc written
+//! to the file it runs. A heredoc fed to a shell or written to a `.sh` file is judged as a
+//! script of its own. A rewrite moved over a file counts only when the command line also
+//! names that file, which is what makes it the original; one whose command line runs
+//! `jq` or `yq` is let through, since splice matches text, not JSON structure, so a
+//! structural JSON edit stays theirs.
 
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -46,6 +50,13 @@ const SHELLS: [&str; 4] = ["bash", "dash", "sh", "zsh"];
 
 /// Programs that edit JSON or YAML by structure.
 const STRUCTURED_EDITORS: [&str; 4] = ["gojq", "jaq", "jq", "yq"];
+
+/// The languages whose file writes the verdict reads in an interpreter's code.
+#[derive(Clone, Copy)]
+enum Interpreter {
+    Python,
+    Node,
+}
 
 /// How many heredocs deep a script inside a script is read.
 const SCRIPT_DEPTH_MAX: usize = 2;
@@ -145,7 +156,7 @@ fn judge(command: &str, depth: usize) -> Verdict {
         .iter()
         .any(|words| program(words).is_some_and(|(name, _)| STRUCTURED_EDITORS.contains(&name)));
     for words in &commands {
-        match editor_offense(words, command) {
+        match editor_offense(words, &lexed.quoted) {
             Some(Offense::Sponge) if structured => {}
             Some(offense) => return Verdict::Deny(offense),
             None => {}
@@ -153,6 +164,11 @@ fn judge(command: &str, depth: usize) -> Verdict {
     }
     if !structured && moves_over_original(&lexed.outer, &commands) {
         return Verdict::Deny(Offense::MoveOverOriginal);
+    }
+    for heredoc in &lexed.heredocs {
+        if let Some(offense) = heredoc_write(heredoc, &commands, &lexed.quoted) {
+            return Verdict::Deny(offense);
+        }
     }
     if depth < SCRIPT_DEPTH_MAX {
         for heredoc in &lexed.heredocs {
@@ -185,9 +201,11 @@ fn runs_as_script(opener: &str) -> bool {
     fed_to_shell || SCRIPT_TARGET.is_match(opener)
 }
 
-/// A command split into the shell's own words and the heredoc bodies it carries.
+/// A command split into the shell's own words, the quoted strings its tokens stand for,
+/// and the heredoc bodies it carries.
 struct Lexed {
     outer: String,
+    quoted: Vec<String>,
     heredocs: Vec<Heredoc>,
 }
 
@@ -197,11 +215,14 @@ struct Heredoc {
     body: String,
 }
 
-/// The command with every quoted string emptied, every comment dropped, and every
-/// heredoc body lifted out beside the raw line that opened it, so `outer` holds the
-/// shell's own words and keeps its line breaks.
+/// The command with every quoted string replaced by a token, its quote marks around the
+/// string's index in `quoted`, every comment dropped, and every heredoc body lifted out
+/// beside the raw line that opened it, so `outer` holds the shell's own words and keeps
+/// its line breaks. A quote mark reaches `outer` unescaped only as part of a token.
 fn lex(command: &str) -> Lexed {
     let mut outer = String::with_capacity(command.len());
+    let mut quoted: Vec<String> = Vec::new();
+    let mut indices: HashMap<String, usize> = HashMap::new();
     let mut line = String::new();
     let mut heredocs: Vec<Heredoc> = Vec::new();
     let mut pending: Vec<String> = Vec::new();
@@ -209,11 +230,13 @@ fn lex(command: &str) -> Lexed {
     while let Some(character) = characters.next() {
         match character {
             '\'' | '"' => {
-                let quoted = quoted_text(&mut characters, character);
+                let text = quoted_text(&mut characters, character);
                 line.push(character);
-                line.push_str(&quoted);
+                line.push_str(&text);
                 line.push(character);
+                let index = intern(&mut quoted, &mut indices, text);
                 outer.push(character);
+                outer.push_str(&index.to_string());
                 outer.push(character);
             }
             '\\' => {
@@ -234,7 +257,11 @@ fn lex(command: &str) -> Lexed {
                 } else {
                     let terminator = heredoc_terminator(&mut characters);
                     pending.push(terminator.clone());
-                    format!("<<{terminator}")
+                    let unquoted: String = terminator
+                        .chars()
+                        .filter(|next| !matches!(next, '\'' | '"'))
+                        .collect();
+                    format!("<<{unquoted}")
                 };
                 outer.push_str(&operator);
                 line.push_str(&operator);
@@ -256,7 +283,60 @@ fn lex(command: &str) -> Lexed {
             }
         }
     }
-    Lexed { outer, heredocs }
+    Lexed {
+        outer,
+        quoted,
+        heredocs,
+    }
+}
+
+/// The index `text` stands at in `quoted`, adding it when it is new, so one string
+/// quoted twice is one token.
+fn intern(quoted: &mut Vec<String>, indices: &mut HashMap<String, usize>, text: String) -> usize {
+    if let Some(index) = indices.get(&text) {
+        return *index;
+    }
+    let index = quoted.len();
+    indices.insert(text.clone(), index);
+    quoted.push(text);
+    assert_eq!(
+        quoted.len(),
+        indices.len(),
+        "every quoted string has one index"
+    );
+    index
+}
+
+/// The word with each token replaced by the quoted string it stands for.
+fn expand(word: &str, quoted: &[String]) -> String {
+    let mut text = String::with_capacity(word.len());
+    let mut characters = word.chars();
+    while let Some(character) = characters.next() {
+        match character {
+            '\\' => {
+                text.push(character);
+                if let Some(escaped) = characters.next() {
+                    text.push(escaped);
+                }
+            }
+            '\'' | '"' => {
+                let digits: String = characters
+                    .by_ref()
+                    .take_while(|next| *next != character)
+                    .collect();
+                let found = digits
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|index| quoted.get(index));
+                let Some(string) = found else {
+                    unreachable!("an unescaped quote mark in a lexed word opens a token");
+                };
+                text.push_str(string);
+            }
+            _ => text.push(character),
+        }
+    }
+    text
 }
 
 type Characters<'c> = std::iter::Peekable<std::str::Chars<'c>>;
@@ -401,19 +481,92 @@ fn skip_xargs_options<'w>(words: &'w [&'w str]) -> &'w [&'w str] {
     rest
 }
 
-fn editor_offense(words: &[&str], raw: &str) -> Option<Offense> {
+fn editor_offense(words: &[&str], quoted: &[String]) -> Option<Offense> {
     let (name, arguments) = program(words)?;
     match name {
         "sed" | "gsed" => sed_in_place(arguments).then_some(Offense::SedInPlace),
         "perl" => perl_in_place(arguments).then_some(Offense::PerlInPlace),
         "awk" | "gawk" => awk_in_place(arguments).then_some(Offense::AwkInPlace),
         "sponge" => Some(Offense::Sponge),
-        "node" | "deno" | "bun" => NODE_WRITE.is_match(raw).then_some(Offense::NodeWrite),
-        _ if name.starts_with("python") || name.starts_with("pypy") => {
-            PYTHON_WRITE.is_match(raw).then_some(Offense::PythonWrite)
+        _ => {
+            let language = interpreter(name)?;
+            let code: Vec<String> = arguments.iter().map(|word| expand(word, quoted)).collect();
+            code.iter()
+                .find_map(|text| interpreter_write(language, text))
         }
-        _ => None,
     }
+}
+
+fn interpreter(name: &str) -> Option<Interpreter> {
+    if matches!(name, "node" | "deno" | "bun") {
+        return Some(Interpreter::Node);
+    }
+    if name.starts_with("python") || name.starts_with("pypy") {
+        return Some(Interpreter::Python);
+    }
+    None
+}
+
+fn interpreter_write(language: Interpreter, code: &str) -> Option<Offense> {
+    match language {
+        Interpreter::Python => PYTHON_WRITE.is_match(code).then_some(Offense::PythonWrite),
+        Interpreter::Node => NODE_WRITE.is_match(code).then_some(Offense::NodeWrite),
+    }
+}
+
+/// The write a heredoc's body makes as an interpreter's code.
+fn heredoc_write(heredoc: &Heredoc, commands: &[Vec<&str>], quoted: &[String]) -> Option<Offense> {
+    let language = heredoc_interpreter(heredoc, commands, quoted)?;
+    interpreter_write(language, &heredoc.body)
+}
+
+/// The interpreter a heredoc's body is code for: the one its opening line feeds it to,
+/// or else the one an interpreter in `commands` runs as the file the heredoc is written
+/// to.
+fn heredoc_interpreter(
+    heredoc: &Heredoc,
+    commands: &[Vec<&str>],
+    quoted: &[String],
+) -> Option<Interpreter> {
+    let opener = lex(&heredoc.opener);
+    let opener_commands = simple_commands(&opener.outer);
+    let fed = opener_commands
+        .iter()
+        .find_map(|words| fed_interpreter(words));
+    if fed.is_some() {
+        return fed;
+    }
+    let target = written_script(&opener)?;
+    commands
+        .iter()
+        .find_map(|words| script_interpreter(words, quoted, &target))
+}
+
+/// The interpreter a command feeds a heredoc to as its code.
+fn fed_interpreter(words: &[&str]) -> Option<Interpreter> {
+    let (name, arguments) = program(words)?;
+    let language = interpreter(name)?;
+    let feeds = arguments
+        .iter()
+        .any(|word| word.contains("<<") && !word.contains("<<<"));
+    feeds.then_some(language)
+}
+
+/// The file a heredoc's opening line redirects into, its tokens expanded.
+fn written_script(opener: &Lexed) -> Option<String> {
+    let captures = REDIRECT_TARGET.captures(&opener.outer)?;
+    let Some(target) = captures.get(1) else {
+        unreachable!("the pattern's one group takes part in every match");
+    };
+    Some(expand(target.as_str(), &opener.quoted))
+}
+
+/// The interpreter a command runs `script` with, when its first operand is that file.
+fn script_interpreter(words: &[&str], quoted: &[String], script: &str) -> Option<Interpreter> {
+    let (name, arguments) = program(words)?;
+    let language = interpreter(name)?;
+    let operand = skip_options(arguments).first()?;
+    (expand(operand, quoted) == script).then_some(language)
 }
 
 /// `sed` edits in place under `--in-place` or an `i` in a short-option cluster before
@@ -475,7 +628,8 @@ fn awk_in_place(arguments: &[&str]) -> bool {
 }
 
 /// A redirect into some file followed by `mv` of that same file is a rewrite of the
-/// file `mv` names as its target.
+/// file `mv` names as its target, when another command names that target too: that is
+/// the original the rewrite read.
 fn moves_over_original(outer: &str, commands: &[Vec<&str>]) -> bool {
     let mut targets: Vec<&str> = Vec::new();
     // A redirect is written with `>`, so a command holding none skips the pattern and
@@ -493,12 +647,31 @@ fn moves_over_original(outer: &str, commands: &[Vec<&str>]) -> bool {
     if targets.is_empty() {
         return false;
     }
-    commands.iter().any(|words| match program(words) {
-        Some(("mv", arguments)) => skip_options(arguments)
-            .first()
-            .is_some_and(|source| targets.contains(source)),
-        _ => false,
+    commands.iter().enumerate().any(|(index, words)| {
+        let Some(("mv", arguments)) = program(words) else {
+            return false;
+        };
+        let operands = skip_options(arguments);
+        let [source, .., destination] = operands else {
+            return false;
+        };
+        if targets.contains(source) {
+            named_elsewhere(commands, index, destination)
+        } else {
+            false
+        }
     })
+}
+
+/// Whether a command other than the one at `skipped` names `path` as a word, directly or
+/// as the file a `<` reads.
+fn named_elsewhere(commands: &[Vec<&str>], skipped: usize, path: &str) -> bool {
+    commands
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != skipped)
+        .flat_map(|(_, words)| words.iter())
+        .any(|word| word.trim_start_matches('<') == path)
 }
 
 #[cfg(test)]

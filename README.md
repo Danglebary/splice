@@ -19,7 +19,7 @@ splice <<'EOF' && cargo test
 EOF
 ```
 
-`splice --help` prints the whole grammar: match counts, line anchors, `~` for a run of lines, inline hunks that change a phrase mid-line, regex hunks, appends, creates, and `splice try`, which applies a script, runs a command, and restores every file afterwards.
+`splice --help` prints the whole grammar: match counts, line anchors, `~` for a run of lines, inline hunks that change a phrase mid-line, regex hunks, appends, creates, a final newline for a file that lacks one, and `splice try`, which applies a script, runs a command, and restores every file afterwards.
 
 ## Install
 
@@ -47,9 +47,9 @@ The hook runs `splice guard` before every Bash call. Without the binary on `PATH
 | 0 | every file written |
 | 1 | a hunk did not match as declared; nothing written |
 | 2 | the script or the arguments are malformed; nothing written |
-| 3 | reading or writing a file failed; stderr names what was and was not written |
+| 3 | reading or writing a file failed; stderr names any file left changed |
 
-`splice try` exits with the command's own status, or under `--expect-fail` with 0 when the command failed and 4 when it passed.
+`splice try` exits with the command's own status, or under `--expect-fail` with 0 when the command failed and 4 when it passed. An interrupted `splice try` exits with 128 plus the signal's number, whatever the command did.
 
 ## Development
 

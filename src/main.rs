@@ -2,14 +2,15 @@
 //! command under `try`, and turns every outcome into an exit code. Every decision it acts
 //! on is made by the library.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{self, ExitCode, ExitStatus, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use splice::cli::{self, Command, Options};
@@ -24,6 +25,18 @@ const SCRIPT_BYTES_MAX: u64 = 16_777_216;
 const FILE_BYTES_MAX: u64 = 67_108_864;
 /// The largest hook input read.
 const HOOK_INPUT_BYTES_MAX: u64 = 4_194_304;
+/// How many names beside a file are tried for its temporary before staging gives up:
+/// enough to step past the leftovers of a few interrupted runs, and a bound on a
+/// directory someone has filled with them.
+const TEMPORARY_NAMES_MAX: usize = 16;
+/// The mode a temporary holding an existing file's text is created with, readable by its
+/// owner alone until it takes the original's permissions.
+const PRIVATE_FILE_MODE: u32 = 0o600;
+/// The mode a new file is created with before the umask applies, the one
+/// `File::create` uses.
+const NEW_FILE_MODE: u32 = 0o666;
+/// The interruption flag's value until a signal arrives; signals are numbered from 1.
+const NO_SIGNAL: usize = 0;
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -52,12 +65,15 @@ fn main() -> ExitCode {
 }
 
 /// A file a script edits, as it stood before any write. `location` is the canonical
-/// path of an existing file, so a symbolic link is edited at its target.
+/// path of an existing file, so a symbolic link is edited at its target. `directories`
+/// are those above a new file that do not exist yet, deepest first, which writing it
+/// makes.
 struct Target {
     path: String,
     location: PathBuf,
     original: Option<String>,
     permissions: Option<fs::Permissions>,
+    directories: Vec<PathBuf>,
 }
 
 struct Change {
@@ -82,8 +98,8 @@ fn run_apply(options: &Options) -> u8 {
     if options.dry_run {
         return exit_code::SUCCESS;
     }
-    if let Err((index, error)) = write_all(&changes) {
-        return report_write_failure(&changes, index, &error);
+    if let Err(code) = write_all(&changes) {
+        return code;
     }
     verify_written(&changes)
 }
@@ -96,41 +112,80 @@ fn run_try(options: &Options, expect_failure: bool, program: &[String]) -> u8 {
     let Some((name, arguments)) = program.split_first() else {
         unreachable!("the grammar refuses `try` without a program");
     };
-    // The flag replaces each signal's default of ending splice, so an interrupt reaches
-    // the command and splice lives on to restore the files; handlers do not survive the
-    // command's exec, so the command still ends on the signal as usual.
-    let interrupted = Arc::new(AtomicBool::new(false));
-    for signal in [SIGINT, SIGTERM, SIGHUP] {
-        if let Err(error) = signal_hook::flag::register(signal, Arc::clone(&interrupted)) {
-            eprint!("{}", report::io_failure("signal handler", &error));
-            return exit_code::IO;
-        }
-    }
+    let interruption = match register_interruption() {
+        Ok(interruption) => interruption,
+        Err(code) => return code,
+    };
     if options.diff {
         print_diffs(&changes);
     }
-    if let Err((index, error)) = write_all(&changes) {
-        let failed = report_write_failure(&changes, index, &error);
-        let written: Vec<&Change> = changes.iter().take(index).collect();
-        let restored = restore(&written);
-        return if restored == exit_code::SUCCESS {
-            failed
-        } else {
-            restored
-        };
+    if let Err(code) = write_all(&changes) {
+        return code;
     }
-    let status = process::Command::new(name)
-        .args(arguments)
-        .stdin(Stdio::null())
-        .status();
+    // An interrupt that lands while the files are written keeps the command from starting.
+    let status = if interruption.load(Ordering::SeqCst) == NO_SIGNAL {
+        let command = process::Command::new(name)
+            .args(arguments)
+            .stdin(Stdio::null())
+            .status();
+        Some(command)
+    } else {
+        None
+    };
     let everything: Vec<&Change> = changes.iter().collect();
     let restored = restore(&everything);
+    let removed = remove_directories(&everything);
     if restored != exit_code::SUCCESS {
         return restored;
     }
-    if interrupted.load(Ordering::SeqCst) {
-        eprint!("{}", report::INTERRUPTED);
+    if removed != exit_code::SUCCESS {
+        return removed;
     }
+    let signal = interruption.load(Ordering::SeqCst);
+    if signal != NO_SIGNAL {
+        eprint!("{}", report::INTERRUPTED);
+        return interrupted_code(signal);
+    }
+    let Some(status) = status else {
+        unreachable!("the command runs unless an interrupt came before it");
+    };
+    command_outcome(name, status, expect_failure)
+}
+
+/// A flag holding the number of the first signal that interrupts `try`. Each handler
+/// replaces its signal's default of ending splice, so an interrupt reaches the command
+/// and splice lives on to restore the files; handlers do not survive the command's exec,
+/// so the command still ends on the signal as usual.
+fn register_interruption() -> Result<Arc<AtomicUsize>, u8> {
+    let interruption = Arc::new(AtomicUsize::new(NO_SIGNAL));
+    for signal in [SIGINT, SIGTERM, SIGHUP] {
+        let Ok(number) = usize::try_from(signal) else {
+            unreachable!("a signal's number is positive");
+        };
+        assert_ne!(number, NO_SIGNAL, "no signal is numbered 0");
+        let registered =
+            signal_hook::flag::register_usize(signal, Arc::clone(&interruption), number);
+        if let Err(error) = registered {
+            eprint!("{}", report::io_failure("signal handler", &error));
+            return Err(exit_code::IO);
+        }
+    }
+    Ok(interruption)
+}
+
+/// The shells' code for a run ended by `signal`, which an interrupted `try` exits with
+/// whatever the command did, since an interrupted run shows nothing about the edit.
+fn interrupted_code(signal: usize) -> u8 {
+    let Ok(number) = u8::try_from(signal) else {
+        unreachable!("the signals `try` handles are numbered below 128");
+    };
+    let Some(code) = exit_code::SIGNAL_BASE.checked_add(number) else {
+        unreachable!("the signals `try` handles are numbered below 128");
+    };
+    code
+}
+
+fn command_outcome(name: &str, status: io::Result<ExitStatus>, expect_failure: bool) -> u8 {
     match status {
         Ok(status) => try_outcome(status, expect_failure),
         Err(error) => {
@@ -320,9 +375,10 @@ fn load(path: &str) -> io::Result<Result<Target, Reason>> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let target = Target {
                 path: path.to_owned(),
-                location: written,
                 original: None,
                 permissions: None,
+                directories: missing_directories(&written)?,
+                location: written,
             };
             return Ok(Ok(target));
         }
@@ -344,7 +400,26 @@ fn load(path: &str) -> io::Result<Result<Target, Reason>> {
         location,
         original: Some(original),
         permissions,
+        directories: Vec::new(),
     }))
+}
+
+/// The directories above `path` that do not exist yet, deepest first.
+fn missing_directories(path: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut missing = Vec::new();
+    for directory in path.ancestors().skip(1) {
+        if directory.as_os_str().is_empty() {
+            break;
+        }
+        match fs::symlink_metadata(directory) {
+            Ok(_) => break,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                missing.push(directory.to_path_buf());
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(missing)
 }
 
 fn print_diffs(changes: &[Change]) {
@@ -360,40 +435,76 @@ fn print_diffs(changes: &[Change]) {
     }
 }
 
-/// Writes every change, stopping at the first failure and naming its index.
-fn write_all(changes: &[Change]) -> Result<(), (usize, io::Error)> {
-    for (index, change) in changes.iter().enumerate() {
+/// Writes every change or none. Every new text is written and synced beside its file
+/// before any file is replaced, so a full disk or a locked directory fails while every
+/// original still stands; a replacement that fails puts back the files replaced before
+/// it.
+fn write_all(changes: &[Change]) -> Result<(), u8> {
+    let staged = stage_all(changes)?;
+    assert_eq!(
+        staged.len(),
+        changes.len(),
+        "every change is staged before any file is replaced"
+    );
+    commit_all(changes, &staged)
+}
+
+/// The temporary file holding each change's text, removing every one written when one
+/// fails.
+fn stage_all(changes: &[Change]) -> Result<Vec<PathBuf>, u8> {
+    let mut staged: Vec<PathBuf> = Vec::with_capacity(changes.len());
+    for change in changes {
         let target = &change.target;
-        write_atomically(
+        match stage(
             &target.location,
             &change.planned,
             target.permissions.as_ref(),
-        )
-        .map_err(|error| (index, error))?;
+        ) {
+            Ok(temporary) => staged.push(temporary),
+            Err(error) => {
+                eprint!("{}", report::write_failure(&target.path, &error));
+                discard(&staged);
+                eprint!("{}", report::NOTHING_WRITTEN);
+                let everything: Vec<&Change> = changes.iter().collect();
+                remove_directories(&everything);
+                return Err(exit_code::IO);
+            }
+        }
+    }
+    Ok(staged)
+}
+
+/// Renames each staged temporary over its file. When one rename fails, the temporaries
+/// not yet renamed are removed and the files already replaced are restored.
+fn commit_all(changes: &[Change], staged: &[PathBuf]) -> Result<(), u8> {
+    for (index, (change, temporary)) in changes.iter().zip(staged).enumerate() {
+        let Err(error) = fs::rename(temporary, &change.target.location) else {
+            continue;
+        };
+        eprint!("{}", report::write_failure(&change.target.path, &error));
+        let Some(unrenamed) = staged.get(index..) else {
+            unreachable!("a failed rename's index lies inside the staged temporaries");
+        };
+        discard(unrenamed);
+        let replaced: Vec<&Change> = changes.iter().take(index).collect();
+        if restore(&replaced) == exit_code::SUCCESS {
+            eprint!("{}", report::NOTHING_WRITTEN);
+        }
+        let everything: Vec<&Change> = changes.iter().collect();
+        remove_directories(&everything);
+        return Err(exit_code::IO);
     }
     Ok(())
 }
 
-fn report_write_failure(changes: &[Change], index: usize, error: &io::Error) -> u8 {
-    let written: Vec<&str> = changes
-        .iter()
-        .take(index)
-        .map(|change| change.target.path.as_str())
-        .collect();
-    let unwritten: Vec<&str> = changes
-        .iter()
-        .skip(index)
-        .skip(1)
-        .map(|change| change.target.path.as_str())
-        .collect();
-    let Some(failed) = changes.get(index) else {
-        unreachable!("the failed index names one of the changes");
-    };
-    eprint!(
-        "{}",
-        report::write_failure(&written, &failed.target.path, error, &unwritten)
-    );
-    exit_code::IO
+/// Removes temporaries that will never be renamed, naming any that remain.
+fn discard(temporaries: &[PathBuf]) {
+    for temporary in temporaries {
+        if let Err(error) = fs::remove_file(temporary) {
+            let path = temporary.display().to_string();
+            eprint!("{}", report::temporary_remains(&path, &error));
+        }
+    }
 }
 
 /// Reads every written file back, so a write that did not land as planned is reported
@@ -443,6 +554,28 @@ fn restore(changes: &[&Change]) -> u8 {
     code
 }
 
+/// Removes the directories each change's new file needed, deepest first. A directory
+/// that holds something else stays, and so does every directory above it.
+fn remove_directories(changes: &[&Change]) -> u8 {
+    let mut code = exit_code::SUCCESS;
+    for change in changes {
+        for directory in &change.target.directories {
+            match fs::remove_dir(directory) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) if error.kind() == io::ErrorKind::DirectoryNotEmpty => break,
+                Err(error) => {
+                    let path = directory.display().to_string();
+                    eprint!("{}", report::directory_remains(&path, &error));
+                    code = exit_code::IO;
+                    break;
+                }
+            }
+        }
+    }
+    code
+}
+
 /// Writes a sibling temporary file, syncs it, and renames it over `location`, so a
 /// reader sees the old file or the new one and never a partial write.
 fn write_atomically(
@@ -450,6 +583,17 @@ fn write_atomically(
     text: &str,
     permissions: Option<&fs::Permissions>,
 ) -> io::Result<()> {
+    let temporary = stage(location, text, permissions)?;
+    fs::rename(&temporary, location).map_err(|error| without_temporary(&temporary, error))
+}
+
+/// Writes and syncs `text` to a temporary file beside `location`, creating the
+/// directory it lies in, and returns the temporary's path.
+fn stage(
+    location: &Path,
+    text: &str,
+    permissions: Option<&fs::Permissions>,
+) -> io::Result<PathBuf> {
     let directory = match location.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent,
         _ => Path::new("."),
@@ -458,27 +602,66 @@ fn write_atomically(
     let Some(name) = location.file_name() else {
         return Err(io::Error::other("the path names no file"));
     };
-    let mut temporary_name = OsString::from(".");
-    temporary_name.push(name);
-    temporary_name.push(format!(".splice-{}", process::id()));
-    let temporary = directory.join(temporary_name);
-    let written =
-        write_synced(&temporary, text, permissions).and_then(|()| fs::rename(&temporary, location));
-    let Err(error) = written else {
-        return Ok(());
-    };
-    match fs::remove_file(&temporary) {
-        Ok(()) => Err(error),
-        Err(cleanup) if cleanup.kind() == io::ErrorKind::NotFound => Err(error),
-        Err(cleanup) => Err(io::Error::other(format!(
-            "{error}; the temporary {} remains: {cleanup}",
-            temporary.display()
-        ))),
+    let mode = permissions.map_or(NEW_FILE_MODE, |_| PRIVATE_FILE_MODE);
+    let (temporary, file) = create_temporary(directory, name, mode)?;
+    match write_synced(file, text, permissions) {
+        Ok(()) => Ok(temporary),
+        Err(error) => Err(without_temporary(&temporary, error)),
     }
 }
 
-fn write_synced(path: &Path, text: &str, permissions: Option<&fs::Permissions>) -> io::Result<()> {
-    let mut file = fs::File::create(path)?;
+/// Creates the first free temporary name beside the file `name`, opening only a path
+/// that does not exist yet, so a leftover temporary or a link someone planted at the
+/// name is stepped past rather than written through.
+fn create_temporary(directory: &Path, name: &OsStr, mode: u32) -> io::Result<(PathBuf, fs::File)> {
+    for attempt in 0..TEMPORARY_NAMES_MAX {
+        let temporary = directory.join(temporary_name(name, attempt));
+        let opened = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(mode)
+            .open(&temporary);
+        match opened {
+            Ok(file) => return Ok((temporary, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!("all {TEMPORARY_NAMES_MAX} temporary names beside the file are taken"),
+    ))
+}
+
+/// `.NAME.splice` for the first attempt, then `.NAME.splice-1`, `.NAME.splice-2`, and on.
+fn temporary_name(name: &OsStr, attempt: usize) -> OsString {
+    let mut temporary = OsString::from(".");
+    temporary.push(name);
+    temporary.push(".splice");
+    if attempt > 0 {
+        temporary.push(format!("-{attempt}"));
+    }
+    temporary
+}
+
+/// `error` once the temporary it left behind is removed, or `error` naming the
+/// temporary when it cannot be.
+fn without_temporary(temporary: &Path, error: io::Error) -> io::Error {
+    match fs::remove_file(temporary) {
+        Ok(()) => error,
+        Err(cleanup) if cleanup.kind() == io::ErrorKind::NotFound => error,
+        Err(cleanup) => io::Error::other(format!(
+            "{error}; the temporary {} remains: {cleanup}",
+            temporary.display()
+        )),
+    }
+}
+
+fn write_synced(
+    mut file: fs::File,
+    text: &str,
+    permissions: Option<&fs::Permissions>,
+) -> io::Result<()> {
     file.write_all(text.as_bytes())?;
     if let Some(permissions) = permissions {
         file.set_permissions(permissions.clone())?;

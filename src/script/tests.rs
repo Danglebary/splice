@@ -347,7 +347,7 @@ mod given_a_regex_hunk {
             script.sections[0].hunks[0].operation,
             Operation::Regex {
                 pattern: Pattern::compile("fn (\\w+)\\(").unwrap(),
-                replacement: "pub fn $1(".to_owned(),
+                replacement: vec!["pub fn $1(".to_owned()],
                 expectation: Expectation::All,
             }
         );
@@ -531,6 +531,28 @@ mod given_append_and_create_hunks {
         assert_eq!(
             script.sections[0].hunks[0].operation,
             Operation::Create { lines: Vec::new() }
+        );
+    }
+}
+
+mod given_a_final_newline_hunk {
+    use super::*;
+
+    #[test]
+    fn when_parsed_then_it_holds_the_final_newline_operation() {
+        let script = parse("=== a\n@@ final newline\n").unwrap();
+
+        assert_eq!(
+            script.sections[0].hunks[0].operation,
+            Operation::FinalNewline
+        );
+    }
+
+    #[test]
+    fn when_parsed_holding_a_line_then_it_is_refused_at_that_line() {
+        assert_eq!(
+            fault_of("=== a\n@@ final newline\n+x\n"),
+            (3, Fault::FinalNewlineWithLines)
         );
     }
 }

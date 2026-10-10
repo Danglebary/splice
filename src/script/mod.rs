@@ -35,11 +35,12 @@ pub enum Operation {
         block: Vec<BlockLine>,
         expectation: Expectation,
     },
-    /// Matches `pattern` over the whole text and replaces each match with `replacement`,
-    /// whose `$1` and `${name}` expand to the match's groups.
+    /// Matches `pattern` over the whole text and replaces each match with the
+    /// `replacement` lines joined at the file's own line break, where `$1` and `${name}`
+    /// expand to the match's groups.
     Regex {
         pattern: Pattern,
-        replacement: String,
+        replacement: Vec<String>,
         expectation: Expectation,
     },
     /// Matches the `old` lines, joined at the file's own line break, as text anywhere in
@@ -54,6 +55,8 @@ pub enum Operation {
     Append { lines: Vec<String> },
     /// Writes a file that does not exist yet, holding the lines.
     Create { lines: Vec<String> },
+    /// Ends the file's last line with the file's own line break.
+    FinalNewline,
 }
 
 /// A regex hunk's pattern, compiled once as the script is parsed. Two patterns are equal
@@ -154,6 +157,7 @@ pub enum Fault {
     AppendEmpty,
     JsonlInvalid { message: String },
     CreateNotAlone,
+    FinalNewlineWithLines,
 }
 
 /// Parses a whole script.
@@ -244,6 +248,7 @@ enum Header {
     Inline(Expectation),
     Append { jsonl: bool },
     Create,
+    FinalNewline,
 }
 
 struct HunkDraft<'t> {
@@ -419,6 +424,7 @@ fn parse_header(text: &str) -> Result<Header, Fault> {
         ["append"] => Ok(Header::Append { jsonl: false }),
         ["append", "jsonl"] => Ok(Header::Append { jsonl: true }),
         ["create"] => Ok(Header::Create),
+        ["final", "newline"] => Ok(Header::FinalNewline),
         _ => Err(Fault::UnknownHeader {
             header: text.trim().to_owned(),
         }),
@@ -470,6 +476,15 @@ fn build(draft: HunkDraft<'_>) -> Result<Hunk, ScriptError> {
         Header::Create => Operation::Create {
             lines: build_added(&body)?,
         },
+        Header::FinalNewline => {
+            if let Some((line, _)) = body.first() {
+                return Err(ScriptError {
+                    line: *line,
+                    fault: Fault::FinalNewlineWithLines,
+                });
+            }
+            Operation::FinalNewline
+        }
     };
     Ok(Hunk {
         line: draft.line,
@@ -554,7 +569,7 @@ fn build_regex(
     for (line, entry) in body {
         match entry {
             Entry::Remove(text) => pattern_lines.push(*text),
-            Entry::Add(text) => replacement_lines.push(*text),
+            Entry::Add(text) => replacement_lines.push((*text).to_owned()),
             Entry::Blank | Entry::Context(_) | Entry::Elision => {
                 return Err(ScriptError {
                     line: *line,
@@ -581,10 +596,9 @@ fn build_regex(
             });
         }
     };
-    let replacement = replacement_lines.join("\n");
     Ok(Operation::Regex {
         pattern,
-        replacement,
+        replacement: replacement_lines,
         expectation,
     })
 }
