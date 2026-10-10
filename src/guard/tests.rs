@@ -110,6 +110,49 @@ mod given_an_interpreter_writing_a_file {
             Verdict::Deny(Offense::NodeWrite)
         );
     }
+
+    #[test]
+    fn when_judged_holding_a_heredoc_written_to_a_script_python_then_runs_then_it_is_denied() {
+        let command = "cat > /tmp/fix.py <<'EOF'\nfrom pathlib import Path\nPath('f').write_text('x')\nEOF\npython3 /tmp/fix.py";
+
+        assert_eq!(verdict_of(command), Verdict::Deny(Offense::PythonWrite));
+    }
+
+    #[test]
+    fn when_judged_holding_a_heredoc_written_to_a_quoted_script_path_python_runs_then_it_is_denied()
+    {
+        let command = "cat > \"$S/fix.py\" <<'EOF'\nimport os\nos.replace('a', 'b')\nEOF\npython3 \"$S/fix.py\"";
+
+        assert_eq!(verdict_of(command), Verdict::Deny(Offense::PythonWrite));
+    }
+}
+
+mod given_an_interpreter_beside_code_it_does_not_run {
+    use super::*;
+
+    #[test]
+    fn when_judged_holding_a_test_file_written_by_a_heredoc_then_run_by_pytest_then_it_is_allowed()
+    {
+        let command = "cat > tests/test_io.py <<'EOF'\ndef test_roundtrip(tmp_path):\n    with open(tmp_path / 'f', 'w') as f:\n        f.write('x')\nEOF\npython3 -m pytest tests/test_io.py";
+
+        assert_eq!(verdict_of(command), Verdict::Allow);
+    }
+
+    #[test]
+    fn when_judged_holding_python_beside_a_grep_for_a_write_call_then_it_is_allowed() {
+        assert_eq!(
+            verdict_of("python3 -m pytest && grep -rn 'os.rename(' src/"),
+            Verdict::Allow
+        );
+    }
+
+    #[test]
+    fn when_judged_holding_node_beside_a_commit_message_naming_a_write_call_then_it_is_allowed() {
+        assert_eq!(
+            verdict_of("node build.js && git commit -m \"Cache through writeFileSync(\""),
+            Verdict::Allow
+        );
+    }
 }
 
 mod given_a_rewrite_through_a_second_file {
@@ -144,6 +187,16 @@ mod given_a_rewrite_through_a_second_file {
     }
 
     #[test]
+    fn when_judged_holding_a_pipeline_into_a_temporary_moved_over_its_input_then_it_is_denied() {
+        let command = "grep -v x f | sort > f.tmp && mv f.tmp f";
+
+        assert_eq!(
+            verdict_of(command),
+            Verdict::Deny(Offense::MoveOverOriginal)
+        );
+    }
+
+    #[test]
     fn when_judged_holding_jq_into_a_temporary_moved_over_the_original_then_it_is_allowed() {
         let command = "jq '.a = 1' f.json > f.json.tmp && mv f.json.tmp f.json";
 
@@ -153,6 +206,29 @@ mod given_a_rewrite_through_a_second_file {
     #[test]
     fn when_judged_holding_jq_into_sponge_then_it_is_allowed() {
         assert_eq!(verdict_of("jq . f.json | sponge f.json"), Verdict::Allow);
+    }
+
+    #[test]
+    fn when_judged_holding_a_download_moved_into_place_then_it_is_allowed() {
+        let command =
+            "curl -sSL https://example.com/x.tar.gz > x.tar.gz.part && mv x.tar.gz.part x.tar.gz";
+
+        assert_eq!(verdict_of(command), Verdict::Allow);
+    }
+
+    #[test]
+    fn when_judged_holding_a_download_to_quoted_paths_moved_into_place_then_it_is_allowed() {
+        let command = "curl -sSL \"$url\" > \"$out.part\" && mv \"$out.part\" \"$out\"";
+
+        assert_eq!(verdict_of(command), Verdict::Allow);
+    }
+
+    #[test]
+    fn when_judged_holding_a_log_moved_into_a_directory_then_it_is_allowed() {
+        assert_eq!(
+            verdict_of("cargo build > build.log && mv build.log logs/"),
+            Verdict::Allow
+        );
     }
 }
 
