@@ -12,14 +12,15 @@ mod support {
     }
 
     /// The scripts in a Markdown file's fenced blocks: the heredoc body of a block that
-    /// runs splice, or a whole block that opens with `===` or `@@`, the latter given a
-    /// file header so it parses alone.
+    /// runs splice, whatever else its opening line chains, or a whole block that opens
+    /// with `===` or `@@`, the latter given a file header so it parses alone.
     pub fn scripts(markdown: &str) -> Vec<String> {
         let mut scripts = Vec::new();
         for block in markdown.split("```").skip(1).step_by(2) {
             let body = block.split_once('\n').map_or("", |(_, rest)| rest);
-            if let Some((_, after_opener)) = body.split_once("<<'EOF'\n") {
-                let script = after_opener.split("\nEOF").next().unwrap();
+            if let Some((_, after_opener)) = body.split_once("<<'EOF'") {
+                let after_opener_line = after_opener.split_once('\n').map_or("", |(_, rest)| rest);
+                let script = after_opener_line.split("\nEOF").next().unwrap();
                 scripts.push(format!("{script}\n"));
             } else if body.starts_with("===") {
                 scripts.push(body.to_owned());
@@ -54,6 +55,20 @@ mod given_the_skill {
             examples.len() >= 6,
             "the skill shows its patterns as scripts"
         );
+        for example in &examples {
+            assert!(splice::script::parse(example).is_ok(), "{example}");
+        }
+    }
+}
+
+mod given_the_readme {
+    use super::support::{read, scripts};
+
+    #[test]
+    fn when_its_examples_are_parsed_then_every_one_is_a_valid_script() {
+        let examples = scripts(&read("README.md"));
+
+        assert!(!examples.is_empty(), "the README shows a script");
         for example in &examples {
             assert!(splice::script::parse(example).is_ok(), "{example}");
         }

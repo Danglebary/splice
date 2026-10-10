@@ -11,7 +11,7 @@ Use it for any edit made from Bash. The Edit tool stays fine for a single change
 
 ## The shape
 
-Always pass the script as a quoted heredoc (`<<'EOF'`, quotes included), so the shell leaves its content alone, and chain the check with `&&`, never `;`, so it runs only on an edit that landed:
+Always pass the script as a quoted heredoc (`<<'EOF'`, quotes included), so the shell leaves its content alone, and chain the check with `&&`, never `;`, so it runs only on an edit that landed. Nothing follows the chain: an `echo $?` or a `| grep` after it replaces the exit code Bash reports with its own, and the exit code is the result.
 
 ```bash
 splice <<'EOF' && cargo test -p ledger
@@ -28,8 +28,9 @@ EOF
 ```
 
 - `=== PATH` starts a file's hunks. Consecutive `===` lines share the hunks below them.
-- `@@` starts a hunk. Every line in it begins with one marker: ` ` (a space) for a context line, matched and kept; `-` for a removed line, matched and removed; `+` for an added line.
-- `~` alone on a line stands for any run of lines, ending where the next matched line matches. Under a context line the run is kept; under a removed line it is removed.
+- `@@` starts a hunk. Every line in it begins with one marker: ` ` (a space) for a context line, matched and kept; `-` for a removed line, matched and removed; `+` for an added line. A hunk holds at least one `-` or `+` line; lines added after an anchor are `+` lines directly under it, in the same hunk.
+- A line holding only its marker is a blank line of that kind: a lone space, `-`, or `+`.
+- `~` alone on a line stands for any run of lines, ending where the next matched line matches. It goes directly under a context or removed line, never under a `+` line; any `+` lines follow it. Under a context line the run is kept; under a removed line it is removed.
 
 ## Headers
 
@@ -118,7 +119,15 @@ splice try --expect-fail -- cargo test -p ledger <<'EOF'
 EOF
 ```
 
-Under `--expect-fail` the exit code is 0 when the tests failed (the mutation was caught) and 4 when they passed (it survived). Without it, the command's own exit code passes through. An interrupted run exits with 128 plus the signal's number, never 0, so it never passes for a caught mutation.
+Under `--expect-fail` the exit code is 0 when the command failed (the mutation was caught) and 4 when it passed (it survived). Without it, the command's own exit code passes through. An interrupted run exits with 128 plus the signal's number, never 0, so it never passes for a caught mutation.
+
+splice has only the command's exit status, so a command that fails for another reason also counts as caught: a mutation that does not compile exits 0 under `--expect-fail` as readily as one the tests catch. Run the build under `try` first, which must pass, then the tests under `--expect-fail`:
+
+```bash
+splice try --script mutation.splice -- cargo build --tests -p ledger && splice try --expect-fail --script mutation.splice -- cargo test -p ledger
+```
+
+The command is run as given, not through a shell, so a pipe cannot change whose status is read; where a shell is wanted, pass `sh -c '...'` and keep the test as its last command.
 
 ## When a script is refused
 
