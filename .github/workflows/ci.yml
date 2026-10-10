@@ -1,6 +1,6 @@
-# The Rust half of the gate on every pull request and every push to main, on Linux
-# and macOS, since the binary ships for both. rustup installs the toolchain that
-# `rust-toolchain.toml` pins the first time cargo runs.
+# The Rust half of the gate and the flake's package build, on every pull request and
+# every push to main, on Linux and macOS, since the binary ships for both. rustup
+# installs the toolchain that `rust-toolchain.toml` pins the first time cargo runs.
 name: CI
 
 on:
@@ -27,3 +27,24 @@ jobs:
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: Test
         run: cargo test --locked
+
+  # The flake's package, built inside the Nix sandbox from the file set `flake.nix`
+  # lists, where `check` builds from the whole checkout.
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: Build
+        run: |
+          package=$(nix build --no-link --print-out-paths --print-build-logs .)
+          "$package/bin/splice" --version
