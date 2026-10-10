@@ -8,6 +8,8 @@ The engineering style guide at `~/.claude/CLAUDE.md` governs. This file states o
 
 `just check` is the gate and must stay green: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` under the lint table in `Cargo.toml`, `cargo test`, and `claude plugin validate --strict` over the marketplace and the plugin. The Rust recipes run inside the flake's shell, entering `nix develop` themselves unless `SPLICE_SHELL` shows they already stand in it; the validator runs the `claude` on `PATH`. `just splice <arguments>` runs the binary from the tree.
 
+`just bench` runs the criterion benchmarks in `benches/`, which stand outside the gate because wall-clock timings vary between runs; `cargo clippy --all-targets` compiles them, so the gate still holds them to the lint table. Each case checks the outcome it declares before it is timed, and the cases that measure scaling count throughput in lines, so linear work holds its lines per second as the input grows. To compare a change, record `just bench -- --save-baseline before` on the parent commit and run `just bench -- --baseline before` on the change.
+
 The toolchain is pinned once, in `rust-toolchain.toml`, which both the flake and CI's rustup read.
 
 ## Shape
