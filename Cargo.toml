@@ -20,6 +20,17 @@ similar = "3.2.0"
 [dev-dependencies]
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
 
+# The library's and the binary's unit tests run under libtest, which refuses criterion's
+# options such as `--save-baseline`; with `bench` off for both, `cargo bench` runs the
+# criterion benches alone and hands those options to them.
+[lib]
+bench = false
+
+[[bin]]
+name = "splice"
+path = "src/main.rs"
+bench = false
+
 [[bench]]
 name = "plan"
 harness = false
