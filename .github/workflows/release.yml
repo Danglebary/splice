@@ -97,3 +97,23 @@ jobs:
             --target "${{ github.sha }}" \
             --title "v${{ needs.version.outputs.version }}" \
             --generate-notes
+
+  # The workflow's own token reaches this repository alone, so the dispatch goes out with
+  # DOTFILES_TOKEN, a fine-grained token with Contents write on Danglebary/dotfiles.
+  # https://docs.github.com/en/rest/authentication/permissions-required-for-fine-grained-personal-access-tokens — checked 2026-10-10
+  dispatch:
+    needs: [version, release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch the release to dotfiles
+        env:
+          GH_TOKEN: ${{ secrets.DOTFILES_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          gh api repos/Danglebary/dotfiles/dispatches \
+            --method POST \
+            --raw-field event_type=input-released \
+            --raw-field 'client_payload[input]=splice' \
+            --raw-field "client_payload[version]=$VERSION" \
+            --raw-field "client_payload[rev]=$GITHUB_SHA"
