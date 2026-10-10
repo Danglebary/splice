@@ -44,8 +44,9 @@
             pkgs.samply
           ];
         };
-      # The binary, built by the pinned toolchain from the manifest, its lock, and the
-      # crate's sources alone. The tests are the gate's, so the build runs none.
+      # The binary, built by the pinned toolchain from the manifest, its lock, the crate's
+      # sources, and the benches, whose files cargo reads to parse a manifest declaring
+      # them. The tests are the gate's, so the build runs none.
       packageFor =
         system:
         let
@@ -66,6 +67,7 @@
             fileset = fileset.unions [
               ./Cargo.toml
               ./Cargo.lock
+              ./benches
               ./src
             ];
           };
