@@ -296,6 +296,23 @@ mod given_a_script_naming_a_file_that_cannot_be_written {
         assert!(!scratch.exists("ran"));
         assert_eq!(scratch.read("first.txt"), "x\n");
     }
+
+    #[test]
+    fn when_applied_beside_a_create_under_a_new_directory_then_that_directory_is_removed() {
+        let scratch = Scratch::new();
+        scratch.directory("locked");
+        scratch.write("locked/second.txt", "y\n");
+        scratch.lock("locked");
+
+        let output = scratch.run(
+            &[],
+            "=== made/new.txt\n@@ create\n+a\n=== locked/second.txt\n@@\n-y\n+Y\n",
+        );
+        scratch.unlock("locked");
+
+        assert_eq!(output.status.code(), Some(3));
+        assert!(!scratch.exists("made"));
+    }
 }
 
 mod given_a_temporary_name_already_taken {
@@ -365,6 +382,33 @@ mod given_the_try_subcommand {
     }
 
     #[test]
+    fn when_run_then_directories_made_for_a_created_file_are_removed_after() {
+        let scratch = Scratch::new();
+
+        let output = scratch.run(
+            &["try", "--", "test", "-f", "made/deeper/new.txt"],
+            "=== made/deeper/new.txt\n@@ create\n+a\n",
+        );
+
+        assert_eq!(output.status.code(), Some(0));
+        assert!(!scratch.exists("made"));
+    }
+
+    #[test]
+    fn when_run_with_a_command_writing_into_a_made_directory_then_that_directory_stays() {
+        let scratch = Scratch::new();
+
+        let output = scratch.run(
+            &["try", "--", "touch", "made/output.txt"],
+            "=== made/new.txt\n@@ create\n+a\n",
+        );
+
+        assert_eq!(output.status.code(), Some(0));
+        assert!(!scratch.exists("made/new.txt"));
+        assert!(scratch.exists("made/output.txt"));
+    }
+
+    #[test]
     fn when_run_with_a_failing_command_then_its_exit_code_passes_through() {
         let scratch = Scratch::new();
         scratch.write("a.txt", "x\n");
@@ -416,6 +460,27 @@ mod given_the_try_subcommand {
 
         assert_eq!(output.status.code(), Some(1));
         assert!(!scratch.exists("ran"));
+    }
+
+    #[test]
+    fn when_run_expecting_failure_and_interrupted_then_it_exits_with_the_signal_code() {
+        let scratch = Scratch::new();
+        scratch.write("a.txt", "x\n");
+
+        let output = scratch.run(
+            &[
+                "try",
+                "--expect-fail",
+                "--",
+                "sh",
+                "-c",
+                "kill -INT $PPID; exit 1",
+            ],
+            "=== a.txt\n@@\n-x\n+y\n",
+        );
+
+        let interrupted = i32::from(splice::exit_code::SIGNAL_BASE) + signal_hook::consts::SIGINT;
+        assert_eq!(output.status.code(), Some(interrupted));
     }
 }
 

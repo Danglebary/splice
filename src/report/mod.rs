@@ -70,7 +70,8 @@ Exit status:
   2  the script or the arguments are malformed, and nothing was written
   3  reading or writing a file failed; stderr names any file left changed
   Under try: the command's own status; with --expect-fail, 0 when the command failed
-  and 4 when it passed.
+  and 4 when it passed. Interrupted, 128 plus the signal's number, whatever the
+  command did.
 ";
 
 pub const NOTHING_WRITTEN: &str = "splice: nothing written\n";
@@ -278,6 +279,11 @@ pub fn write_failure(path: &str, error: &std::io::Error) -> String {
 #[must_use]
 pub fn temporary_remains(path: &str, error: &std::io::Error) -> String {
     format!("splice: {path}: could not remove this temporary file: {error}\n")
+}
+
+#[must_use]
+pub fn directory_remains(path: &str, error: &std::io::Error) -> String {
+    format!("splice: {path}: could not remove this directory splice made: {error}\n")
 }
 
 #[must_use]

@@ -118,7 +118,7 @@ splice try --expect-fail -- cargo test -p ledger <<'EOF'
 EOF
 ```
 
-Under `--expect-fail` the exit code is 0 when the tests failed (the mutation was caught) and 4 when they passed (it survived). Without it, the command's own exit code passes through.
+Under `--expect-fail` the exit code is 0 when the tests failed (the mutation was caught) and 4 when they passed (it survived). Without it, the command's own exit code passes through. An interrupted run exits with 128 plus the signal's number, never 0, so it never passes for a caught mutation.
 
 ## When a script is refused
 

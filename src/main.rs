@@ -10,7 +10,7 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{self, ExitCode, ExitStatus, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use splice::cli::{self, Command, Options};
@@ -35,6 +35,8 @@ const PRIVATE_FILE_MODE: u32 = 0o600;
 /// The mode a new file is created with before the umask applies, the one
 /// `File::create` uses.
 const NEW_FILE_MODE: u32 = 0o666;
+/// The interruption flag's value until a signal arrives; signals are numbered from 1.
+const NO_SIGNAL: usize = 0;
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -63,12 +65,15 @@ fn main() -> ExitCode {
 }
 
 /// A file a script edits, as it stood before any write. `location` is the canonical
-/// path of an existing file, so a symbolic link is edited at its target.
+/// path of an existing file, so a symbolic link is edited at its target. `directories`
+/// are those above a new file that do not exist yet, deepest first, which writing it
+/// makes.
 struct Target {
     path: String,
     location: PathBuf,
     original: Option<String>,
     permissions: Option<fs::Permissions>,
+    directories: Vec<PathBuf>,
 }
 
 struct Change {
@@ -107,34 +112,80 @@ fn run_try(options: &Options, expect_failure: bool, program: &[String]) -> u8 {
     let Some((name, arguments)) = program.split_first() else {
         unreachable!("the grammar refuses `try` without a program");
     };
-    // The flag replaces each signal's default of ending splice, so an interrupt reaches
-    // the command and splice lives on to restore the files; handlers do not survive the
-    // command's exec, so the command still ends on the signal as usual.
-    let interrupted = Arc::new(AtomicBool::new(false));
-    for signal in [SIGINT, SIGTERM, SIGHUP] {
-        if let Err(error) = signal_hook::flag::register(signal, Arc::clone(&interrupted)) {
-            eprint!("{}", report::io_failure("signal handler", &error));
-            return exit_code::IO;
-        }
-    }
+    let interruption = match register_interruption() {
+        Ok(interruption) => interruption,
+        Err(code) => return code,
+    };
     if options.diff {
         print_diffs(&changes);
     }
     if let Err(code) = write_all(&changes) {
         return code;
     }
-    let status = process::Command::new(name)
-        .args(arguments)
-        .stdin(Stdio::null())
-        .status();
+    // An interrupt that lands while the files are written keeps the command from starting.
+    let status = if interruption.load(Ordering::SeqCst) == NO_SIGNAL {
+        let command = process::Command::new(name)
+            .args(arguments)
+            .stdin(Stdio::null())
+            .status();
+        Some(command)
+    } else {
+        None
+    };
     let everything: Vec<&Change> = changes.iter().collect();
     let restored = restore(&everything);
+    let removed = remove_directories(&everything);
     if restored != exit_code::SUCCESS {
         return restored;
     }
-    if interrupted.load(Ordering::SeqCst) {
-        eprint!("{}", report::INTERRUPTED);
+    if removed != exit_code::SUCCESS {
+        return removed;
     }
+    let signal = interruption.load(Ordering::SeqCst);
+    if signal != NO_SIGNAL {
+        eprint!("{}", report::INTERRUPTED);
+        return interrupted_code(signal);
+    }
+    let Some(status) = status else {
+        unreachable!("the command runs unless an interrupt came before it");
+    };
+    command_outcome(name, status, expect_failure)
+}
+
+/// A flag holding the number of the first signal that interrupts `try`. Each handler
+/// replaces its signal's default of ending splice, so an interrupt reaches the command
+/// and splice lives on to restore the files; handlers do not survive the command's exec,
+/// so the command still ends on the signal as usual.
+fn register_interruption() -> Result<Arc<AtomicUsize>, u8> {
+    let interruption = Arc::new(AtomicUsize::new(NO_SIGNAL));
+    for signal in [SIGINT, SIGTERM, SIGHUP] {
+        let Ok(number) = usize::try_from(signal) else {
+            unreachable!("a signal's number is positive");
+        };
+        assert_ne!(number, NO_SIGNAL, "no signal is numbered 0");
+        let registered =
+            signal_hook::flag::register_usize(signal, Arc::clone(&interruption), number);
+        if let Err(error) = registered {
+            eprint!("{}", report::io_failure("signal handler", &error));
+            return Err(exit_code::IO);
+        }
+    }
+    Ok(interruption)
+}
+
+/// The shells' code for a run ended by `signal`, which an interrupted `try` exits with
+/// whatever the command did, since an interrupted run shows nothing about the edit.
+fn interrupted_code(signal: usize) -> u8 {
+    let Ok(number) = u8::try_from(signal) else {
+        unreachable!("the signals `try` handles are numbered below 128");
+    };
+    let Some(code) = exit_code::SIGNAL_BASE.checked_add(number) else {
+        unreachable!("the signals `try` handles are numbered below 128");
+    };
+    code
+}
+
+fn command_outcome(name: &str, status: io::Result<ExitStatus>, expect_failure: bool) -> u8 {
     match status {
         Ok(status) => try_outcome(status, expect_failure),
         Err(error) => {
@@ -324,9 +375,10 @@ fn load(path: &str) -> io::Result<Result<Target, Reason>> {
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let target = Target {
                 path: path.to_owned(),
-                location: written,
                 original: None,
                 permissions: None,
+                directories: missing_directories(&written)?,
+                location: written,
             };
             return Ok(Ok(target));
         }
@@ -348,7 +400,26 @@ fn load(path: &str) -> io::Result<Result<Target, Reason>> {
         location,
         original: Some(original),
         permissions,
+        directories: Vec::new(),
     }))
+}
+
+/// The directories above `path` that do not exist yet, deepest first.
+fn missing_directories(path: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut missing = Vec::new();
+    for directory in path.ancestors().skip(1) {
+        if directory.as_os_str().is_empty() {
+            break;
+        }
+        match fs::symlink_metadata(directory) {
+            Ok(_) => break,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                missing.push(directory.to_path_buf());
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(missing)
 }
 
 fn print_diffs(changes: &[Change]) {
@@ -394,6 +465,8 @@ fn stage_all(changes: &[Change]) -> Result<Vec<PathBuf>, u8> {
                 eprint!("{}", report::write_failure(&target.path, &error));
                 discard(&staged);
                 eprint!("{}", report::NOTHING_WRITTEN);
+                let everything: Vec<&Change> = changes.iter().collect();
+                remove_directories(&everything);
                 return Err(exit_code::IO);
             }
         }
@@ -417,6 +490,8 @@ fn commit_all(changes: &[Change], staged: &[PathBuf]) -> Result<(), u8> {
         if restore(&replaced) == exit_code::SUCCESS {
             eprint!("{}", report::NOTHING_WRITTEN);
         }
+        let everything: Vec<&Change> = changes.iter().collect();
+        remove_directories(&everything);
         return Err(exit_code::IO);
     }
     Ok(())
@@ -474,6 +549,28 @@ fn restore(changes: &[&Change]) -> u8 {
         if let Err(error) = restored {
             eprint!("{}", report::restore_failure(&target.path, &error));
             code = exit_code::IO;
+        }
+    }
+    code
+}
+
+/// Removes the directories each change's new file needed, deepest first. A directory
+/// that holds something else stays, and so does every directory above it.
+fn remove_directories(changes: &[&Change]) -> u8 {
+    let mut code = exit_code::SUCCESS;
+    for change in changes {
+        for directory in &change.target.directories {
+            match fs::remove_dir(directory) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) if error.kind() == io::ErrorKind::DirectoryNotEmpty => break,
+                Err(error) => {
+                    let path = directory.display().to_string();
+                    eprint!("{}", report::directory_remains(&path, &error));
+                    code = exit_code::IO;
+                    break;
+                }
+            }
         }
     }
     code
