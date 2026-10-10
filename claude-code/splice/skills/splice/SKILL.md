@@ -43,8 +43,9 @@ EOF
 | `@@ inline`, `@@ inline all`, `@@ inline count N` | `-` lines join into text found anywhere, mid-line included, and `+` lines into what replaces it; no context lines |
 | `@@ append`, `@@ append jsonl` | `+` lines added at the end; `jsonl` checks each line parses as JSON |
 | `@@ create` | `+` lines written to a file that does not exist yet |
+| `@@ final newline` | ends the last line of a file that lacks a final newline; no lines follow it |
 
-Every hunk matches the file as it was before any hunk applied, so line numbers stay valid across a batch: write hunks in any order and never adjust a line number for an earlier hunk. Two hunks may not change the same lines; merge them into one.
+Every hunk matches the file as it was before any hunk applied, so line numbers stay valid across a batch: write hunks in any order and never adjust a line number for an earlier hunk. Two hunks may not change the same lines; merge them into one. A file that lacks a final newline keeps lacking one through every edit unless `@@ final newline` adds it.
 
 ## Patterns
 

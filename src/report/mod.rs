@@ -54,13 +54,15 @@ Headers:
                          ($1, ${name}; $$ for a literal $)
   @@ append [jsonl]      '+' lines added at the end; jsonl checks each line is JSON
   @@ create              '+' lines written to a file that does not exist yet
+  @@ final newline       ends the last line of a file that lacks a final newline
 
 Matching is literal and by whole lines, except under inline, which matches text
 anywhere and joins its lines at the file's own line break, and regex. Every hunk
 matches the file as it was before any hunk applied, so line numbers stay valid across
 a batch and hunks must not overlap. A hunk that would leave its file unchanged is
-refused. Blank lines at a hunk's edges are dropped; write a lone space for a blank
-context line there.
+refused, and so are hunks that together would. A file that lacks a final newline
+keeps lacking one unless `@@ final newline` adds it. Blank lines at a hunk's edges are
+dropped; write a lone space for a blank context line there.
 
 Exit status:
   0  every file written
@@ -97,7 +99,7 @@ fn fault(fault: &Fault) -> String {
         Fault::UnknownHeader { header } => format!(
             "unknown header `@@ {header}`; expected `@@`, `@@ all`, `@@ count N`, `@@ line N`, \
              `@@ inline [all|count N]`, `@@ regex [all|count N]`, `@@ append [jsonl]`, \
-             or `@@ create`"
+             `@@ create`, or `@@ final newline`"
         ),
         Fault::InvalidNumber { word } => format!("`{word}` is not a whole number of 1 or more"),
         Fault::UnexpectedLine => {
@@ -123,6 +125,7 @@ fn fault(fault: &Fault) -> String {
         Fault::AppendEmpty => "the append adds no line".to_owned(),
         Fault::JsonlInvalid { message } => format!("the line is not JSON: {message}"),
         Fault::CreateNotAlone => "`@@ create` is the only hunk for its file".to_owned(),
+        Fault::FinalNewlineWithLines => "`@@ final newline` holds no lines".to_owned(),
     }
 }
 
@@ -173,6 +176,17 @@ fn reason(reason: &Reason) -> String {
         }
         Reason::Unchanged => {
             "the replacement equals the matched text, so the hunk changes nothing".to_owned()
+        }
+        Reason::FinalNewlinePresent => {
+            "the file already ends in a newline, so `@@ final newline` changes nothing".to_owned()
+        }
+        Reason::OnlyAddsFinalNewline => {
+            "the hunks change only the file's missing final newline, which splice keeps \
+             missing; `@@ final newline` adds one"
+                .to_owned()
+        }
+        Reason::CancelsOut => {
+            "the file's hunks each change it, and together leave it as it was".to_owned()
         }
     }
 }

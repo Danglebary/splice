@@ -54,6 +54,8 @@ pub enum Operation {
     Append { lines: Vec<String> },
     /// Writes a file that does not exist yet, holding the lines.
     Create { lines: Vec<String> },
+    /// Ends the file's last line with the file's own line break.
+    FinalNewline,
 }
 
 /// A regex hunk's pattern, compiled once as the script is parsed. Two patterns are equal
@@ -154,6 +156,7 @@ pub enum Fault {
     AppendEmpty,
     JsonlInvalid { message: String },
     CreateNotAlone,
+    FinalNewlineWithLines,
 }
 
 /// Parses a whole script.
@@ -244,6 +247,7 @@ enum Header {
     Inline(Expectation),
     Append { jsonl: bool },
     Create,
+    FinalNewline,
 }
 
 struct HunkDraft<'t> {
@@ -419,6 +423,7 @@ fn parse_header(text: &str) -> Result<Header, Fault> {
         ["append"] => Ok(Header::Append { jsonl: false }),
         ["append", "jsonl"] => Ok(Header::Append { jsonl: true }),
         ["create"] => Ok(Header::Create),
+        ["final", "newline"] => Ok(Header::FinalNewline),
         _ => Err(Fault::UnknownHeader {
             header: text.trim().to_owned(),
         }),
@@ -470,6 +475,15 @@ fn build(draft: HunkDraft<'_>) -> Result<Hunk, ScriptError> {
         Header::Create => Operation::Create {
             lines: build_added(&body)?,
         },
+        Header::FinalNewline => {
+            if let Some((line, _)) = body.first() {
+                return Err(ScriptError {
+                    line: *line,
+                    fault: Fault::FinalNewlineWithLines,
+                });
+            }
+            Operation::FinalNewline
+        }
     };
     Ok(Hunk {
         line: draft.line,

@@ -72,6 +72,20 @@ mod given_a_near_miss_differing_in_whitespace {
     }
 }
 
+mod given_a_refusal_whose_hunks_only_add_a_final_newline {
+    use super::*;
+
+    #[test]
+    fn when_rendered_then_it_names_the_header_that_adds_one() {
+        let refusal = Refusal {
+            hunk_line: 2,
+            reason: Reason::OnlyAddsFinalNewline,
+        };
+
+        assert!(super::refusal("f", &refusal).contains("`@@ final newline`"));
+    }
+}
+
 mod given_a_script_error {
     use super::*;
 

@@ -555,4 +555,71 @@ mod given_several_hunks_in_one_file {
 
         assert_eq!(reasons.len(), 2);
     }
+
+    #[test]
+    fn when_planned_with_an_insertion_and_a_removal_that_cancel_then_it_is_refused_as_cancelling_out()
+     {
+        let reasons = refused(
+            Some("use bar;\nuse foo;\n"),
+            "@@\n use bar;\n+use foo;\n@@\n-use foo;\n",
+        );
+
+        assert_eq!(reasons, vec![Reason::CancelsOut]);
+    }
+}
+
+mod given_a_file_without_a_final_newline {
+    use super::*;
+
+    #[test]
+    fn when_planned_with_final_newline_then_the_last_line_ends_in_a_newline() {
+        assert_eq!(applied("a\nb", "@@ final newline\n"), "a\nb\n");
+    }
+
+    #[test]
+    fn when_planned_with_final_newline_over_a_crlf_file_then_the_last_line_ends_in_crlf() {
+        assert_eq!(applied("a\r\nb", "@@ final newline\n"), "a\r\nb\r\n");
+    }
+
+    #[test]
+    fn when_planned_with_final_newline_beside_an_edit_to_the_last_line_then_both_apply() {
+        let text = applied("a\nb", "@@\n-b\n+B\n@@ final newline\n");
+
+        assert_eq!(text, "a\nB\n");
+    }
+
+    #[test]
+    fn when_planned_with_final_newline_beside_an_append_then_the_appended_line_ends_in_one() {
+        assert_eq!(applied("a", "@@ append\n+b\n@@ final newline\n"), "a\nb\n");
+    }
+
+    #[test]
+    fn when_planned_with_a_hunk_whose_one_change_is_a_final_newline_then_it_is_refused_naming_that()
+    {
+        assert_eq!(
+            refused(Some("a"), "@@\n-a\n+a\n"),
+            vec![Reason::OnlyAddsFinalNewline]
+        );
+    }
+}
+
+mod given_a_file_ending_in_a_newline {
+    use super::*;
+
+    #[test]
+    fn when_planned_with_final_newline_then_it_is_refused_as_present() {
+        assert_eq!(
+            refused(Some("a\n"), "@@ final newline\n"),
+            vec![Reason::FinalNewlinePresent]
+        );
+    }
+}
+
+mod given_an_empty_file {
+    use super::*;
+
+    #[test]
+    fn when_planned_with_final_newline_then_the_file_holds_one_newline() {
+        assert_eq!(applied("", "@@ final newline\n"), "\n");
+    }
 }
