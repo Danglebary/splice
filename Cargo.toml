@@ -1,6 +1,6 @@
 [package]
 name = "splice"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 # The least compiler the crate is built with, the stable release `rust-toolchain.toml`
 # pins rather than the floor a dependency declares.
