@@ -30,7 +30,7 @@ struct Call {
     exit_code: u8,
 }
 
-const CALLS: [Call; 3] = [
+const CALLS: [Call; 4] = [
     Call {
         name: "version",
         arguments: &["--version"],
@@ -41,6 +41,12 @@ const CALLS: [Call; 3] = [
         name: "guard-allow",
         arguments: &["guard"],
         input: r#"{"tool_name":"Bash","tool_input":{"command":"ls -la"}}"#,
+        exit_code: exit_code::SUCCESS,
+    },
+    Call {
+        name: "guard-redirect",
+        arguments: &["guard"],
+        input: r#"{"tool_name":"Bash","tool_input":{"command":"cargo test --quiet 2>&1 | tail -5"}}"#,
         exit_code: exit_code::SUCCESS,
     },
     Call {

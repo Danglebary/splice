@@ -477,11 +477,19 @@ fn awk_in_place(arguments: &[&str]) -> bool {
 /// A redirect into some file followed by `mv` of that same file is a rewrite of the
 /// file `mv` names as its target.
 fn moves_over_original(outer: &str, commands: &[Vec<&str>]) -> bool {
-    let targets: Vec<&str> = REDIRECT_TARGET
-        .captures_iter(outer)
-        .filter_map(|captures| captures.get(1).map(|target| target.as_str()))
-        .filter(|target| *target != "/dev/null")
-        .collect();
+    let mut targets: Vec<&str> = Vec::new();
+    // A redirect is written with `>`, so a command holding none skips the pattern and
+    // never compiles it.
+    if outer.contains('>') {
+        for captures in REDIRECT_TARGET.captures_iter(outer) {
+            let Some(target) = captures.get(1) else {
+                unreachable!("the pattern's one group takes part in every match");
+            };
+            if target.as_str() != "/dev/null" {
+                targets.push(target.as_str());
+            }
+        }
+    }
     if targets.is_empty() {
         return false;
     }
