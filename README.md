@@ -47,7 +47,7 @@ The hook runs `splice guard` before every Bash call. Without the binary on `PATH
 | 0 | every file written |
 | 1 | a hunk did not match as declared; nothing written |
 | 2 | the script or the arguments are malformed; nothing written |
-| 3 | reading or writing a file failed; stderr names what was and was not written |
+| 3 | reading or writing a file failed; stderr names any file left changed |
 
 `splice try` exits with the command's own status, or under `--expect-fail` with 0 when the command failed and 4 when it passed.
 

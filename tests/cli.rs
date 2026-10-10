@@ -11,7 +11,9 @@ use support::{Scratch, stderr, stdout};
 #[cfg(test)]
 mod support {
     use std::fs;
+    use std::fs::Permissions;
     use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
     use std::process::{Command, Output, Stdio};
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -44,6 +46,26 @@ mod support {
 
         pub fn exists(&self, name: &str) -> bool {
             self.root.join(name).exists()
+        }
+
+        pub fn directory(&self, name: &str) {
+            fs::create_dir(self.root.join(name)).unwrap();
+        }
+
+        /// Makes the directory `name` refuse new files, so a write beside a file in it fails.
+        pub fn lock(&self, name: &str) {
+            let directory = self.root.join(name);
+            fs::set_permissions(&directory, Permissions::from_mode(0o555)).unwrap();
+            assert!(
+                fs::write(directory.join("probe"), "").is_err(),
+                "a locked directory refuses a new file, which a root user is never refused"
+            );
+        }
+
+        /// Lets the directory `name` take new files again, so the scratch can be removed.
+        pub fn unlock(&self, name: &str) {
+            let directory = self.root.join(name);
+            fs::set_permissions(&directory, Permissions::from_mode(0o755)).unwrap();
         }
 
         pub fn run(&self, arguments: &[&str], stdin: &str) -> Output {
@@ -223,6 +245,45 @@ mod given_a_malformed_script {
         assert_eq!(output.status.code(), Some(2));
         assert!(stderr(&output).contains("script line 2"));
         assert_eq!(scratch.read("a.txt"), "x\n");
+    }
+}
+
+mod given_a_script_naming_a_file_that_cannot_be_written {
+    use super::*;
+
+    const SCRIPT: &str = "=== first.txt\n@@\n-x\n+X\n=== locked/second.txt\n@@\n-y\n+Y\n";
+
+    fn scratch_with_a_locked_second_file() -> Scratch {
+        let scratch = Scratch::new();
+        scratch.write("first.txt", "x\n");
+        scratch.directory("locked");
+        scratch.write("locked/second.txt", "y\n");
+        scratch.lock("locked");
+        scratch
+    }
+
+    #[test]
+    fn when_applied_then_no_file_is_written_and_it_exits_with_the_io_code() {
+        let scratch = scratch_with_a_locked_second_file();
+
+        let output = scratch.run(&[], SCRIPT);
+        scratch.unlock("locked");
+
+        assert_eq!(output.status.code(), Some(3));
+        assert_eq!(scratch.read("first.txt"), "x\n");
+        assert_eq!(scratch.read("locked/second.txt"), "y\n");
+    }
+
+    #[test]
+    fn when_tried_then_the_command_never_runs_and_no_file_is_written() {
+        let scratch = scratch_with_a_locked_second_file();
+
+        let output = scratch.run(&["try", "--", "touch", "ran"], SCRIPT);
+        scratch.unlock("locked");
+
+        assert_eq!(output.status.code(), Some(3));
+        assert!(!scratch.exists("ran"));
+        assert_eq!(scratch.read("first.txt"), "x\n");
     }
 }
 

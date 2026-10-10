@@ -82,8 +82,8 @@ fn run_apply(options: &Options) -> u8 {
     if options.dry_run {
         return exit_code::SUCCESS;
     }
-    if let Err((index, error)) = write_all(&changes) {
-        return report_write_failure(&changes, index, &error);
+    if let Err(code) = write_all(&changes) {
+        return code;
     }
     verify_written(&changes)
 }
@@ -109,15 +109,8 @@ fn run_try(options: &Options, expect_failure: bool, program: &[String]) -> u8 {
     if options.diff {
         print_diffs(&changes);
     }
-    if let Err((index, error)) = write_all(&changes) {
-        let failed = report_write_failure(&changes, index, &error);
-        let written: Vec<&Change> = changes.iter().take(index).collect();
-        let restored = restore(&written);
-        return if restored == exit_code::SUCCESS {
-            failed
-        } else {
-            restored
-        };
+    if let Err(code) = write_all(&changes) {
+        return code;
     }
     let status = process::Command::new(name)
         .args(arguments)
@@ -360,40 +353,72 @@ fn print_diffs(changes: &[Change]) {
     }
 }
 
-/// Writes every change, stopping at the first failure and naming its index.
-fn write_all(changes: &[Change]) -> Result<(), (usize, io::Error)> {
-    for (index, change) in changes.iter().enumerate() {
+/// Writes every change or none. Every new text is written and synced beside its file
+/// before any file is replaced, so a full disk or a locked directory fails while every
+/// original still stands; a replacement that fails puts back the files replaced before
+/// it.
+fn write_all(changes: &[Change]) -> Result<(), u8> {
+    let staged = stage_all(changes)?;
+    assert_eq!(
+        staged.len(),
+        changes.len(),
+        "every change is staged before any file is replaced"
+    );
+    commit_all(changes, &staged)
+}
+
+/// The temporary file holding each change's text, removing every one written when one
+/// fails.
+fn stage_all(changes: &[Change]) -> Result<Vec<PathBuf>, u8> {
+    let mut staged: Vec<PathBuf> = Vec::with_capacity(changes.len());
+    for change in changes {
         let target = &change.target;
-        write_atomically(
+        match stage(
             &target.location,
             &change.planned,
             target.permissions.as_ref(),
-        )
-        .map_err(|error| (index, error))?;
+        ) {
+            Ok(temporary) => staged.push(temporary),
+            Err(error) => {
+                eprint!("{}", report::write_failure(&target.path, &error));
+                discard(&staged);
+                eprint!("{}", report::NOTHING_WRITTEN);
+                return Err(exit_code::IO);
+            }
+        }
+    }
+    Ok(staged)
+}
+
+/// Renames each staged temporary over its file. When one rename fails, the temporaries
+/// not yet renamed are removed and the files already replaced are restored.
+fn commit_all(changes: &[Change], staged: &[PathBuf]) -> Result<(), u8> {
+    for (index, (change, temporary)) in changes.iter().zip(staged).enumerate() {
+        let Err(error) = fs::rename(temporary, &change.target.location) else {
+            continue;
+        };
+        eprint!("{}", report::write_failure(&change.target.path, &error));
+        let Some(unrenamed) = staged.get(index..) else {
+            unreachable!("a failed rename's index lies inside the staged temporaries");
+        };
+        discard(unrenamed);
+        let replaced: Vec<&Change> = changes.iter().take(index).collect();
+        if restore(&replaced) == exit_code::SUCCESS {
+            eprint!("{}", report::NOTHING_WRITTEN);
+        }
+        return Err(exit_code::IO);
     }
     Ok(())
 }
 
-fn report_write_failure(changes: &[Change], index: usize, error: &io::Error) -> u8 {
-    let written: Vec<&str> = changes
-        .iter()
-        .take(index)
-        .map(|change| change.target.path.as_str())
-        .collect();
-    let unwritten: Vec<&str> = changes
-        .iter()
-        .skip(index)
-        .skip(1)
-        .map(|change| change.target.path.as_str())
-        .collect();
-    let Some(failed) = changes.get(index) else {
-        unreachable!("the failed index names one of the changes");
-    };
-    eprint!(
-        "{}",
-        report::write_failure(&written, &failed.target.path, error, &unwritten)
-    );
-    exit_code::IO
+/// Removes temporaries that will never be renamed, naming any that remain.
+fn discard(temporaries: &[PathBuf]) {
+    for temporary in temporaries {
+        if let Err(error) = fs::remove_file(temporary) {
+            let path = temporary.display().to_string();
+            eprint!("{}", report::temporary_remains(&path, &error));
+        }
+    }
 }
 
 /// Reads every written file back, so a write that did not land as planned is reported
@@ -450,6 +475,17 @@ fn write_atomically(
     text: &str,
     permissions: Option<&fs::Permissions>,
 ) -> io::Result<()> {
+    let temporary = stage(location, text, permissions)?;
+    fs::rename(&temporary, location).map_err(|error| without_temporary(&temporary, error))
+}
+
+/// Writes and syncs `text` to a temporary file beside `location`, creating the
+/// directory it lies in, and returns the temporary's path.
+fn stage(
+    location: &Path,
+    text: &str,
+    permissions: Option<&fs::Permissions>,
+) -> io::Result<PathBuf> {
     let directory = match location.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent,
         _ => Path::new("."),
@@ -462,18 +498,22 @@ fn write_atomically(
     temporary_name.push(name);
     temporary_name.push(format!(".splice-{}", process::id()));
     let temporary = directory.join(temporary_name);
-    let written =
-        write_synced(&temporary, text, permissions).and_then(|()| fs::rename(&temporary, location));
-    let Err(error) = written else {
-        return Ok(());
-    };
-    match fs::remove_file(&temporary) {
-        Ok(()) => Err(error),
-        Err(cleanup) if cleanup.kind() == io::ErrorKind::NotFound => Err(error),
-        Err(cleanup) => Err(io::Error::other(format!(
+    match write_synced(&temporary, text, permissions) {
+        Ok(()) => Ok(temporary),
+        Err(error) => Err(without_temporary(&temporary, error)),
+    }
+}
+
+/// `error` once the temporary it left behind is removed, or `error` naming the
+/// temporary when it cannot be.
+fn without_temporary(temporary: &Path, error: io::Error) -> io::Error {
+    match fs::remove_file(temporary) {
+        Ok(()) => error,
+        Err(cleanup) if cleanup.kind() == io::ErrorKind::NotFound => error,
+        Err(cleanup) => io::Error::other(format!(
             "{error}; the temporary {} remains: {cleanup}",
             temporary.display()
-        ))),
+        )),
     }
 }
 

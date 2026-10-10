@@ -68,7 +68,7 @@ Exit status:
   0  every file written
   1  refused: a hunk did not match as declared, and nothing was written
   2  the script or the arguments are malformed, and nothing was written
-  3  reading or writing a file failed
+  3  reading or writing a file failed; stderr names any file left changed
   Under try: the command's own status; with --expect-fail, 0 when the command failed
   and 4 when it passed.
 ";
@@ -270,27 +270,14 @@ pub fn io_failure(path: &str, error: &std::io::Error) -> String {
     format!("splice: {path}: {error}\n")
 }
 
-/// The files a failed batch wrote before the failure, the one it failed on, and those it
-/// never reached, so the state of the tree is stated rather than guessed.
 #[must_use]
-pub fn write_failure(
-    written: &[&str],
-    failed: &str,
-    error: &std::io::Error,
-    unwritten: &[&str],
-) -> String {
-    let mut message = format!("splice: {failed}: could not write: {error}\n");
-    if !written.is_empty() {
-        message.push_str("splice: already written: ");
-        message.push_str(&written.join(", "));
-        message.push('\n');
-    }
-    if !unwritten.is_empty() {
-        message.push_str("splice: not written: ");
-        message.push_str(&unwritten.join(", "));
-        message.push('\n');
-    }
-    message
+pub fn write_failure(path: &str, error: &std::io::Error) -> String {
+    format!("splice: {path}: could not write: {error}\n")
+}
+
+#[must_use]
+pub fn temporary_remains(path: &str, error: &std::io::Error) -> String {
+    format!("splice: {path}: could not remove this temporary file: {error}\n")
 }
 
 #[must_use]
