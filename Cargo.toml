@@ -1,6 +1,6 @@
 [package]
 name = "splice"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 # The least compiler the crate is built with, the stable release `rust-toolchain.toml`
 # pins rather than the floor a dependency declares.
@@ -19,6 +19,17 @@ similar = "3.2.0"
 # and draw its charts; the benches read neither, so only its cargo harness is taken.
 [dev-dependencies]
 criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+# The library's and the binary's unit tests run under libtest, which refuses criterion's
+# options such as `--save-baseline`; with `bench` off for both, `cargo bench` runs the
+# criterion benches alone and hands those options to them.
+[lib]
+bench = false
+
+[[bin]]
+name = "splice"
+path = "src/main.rs"
+bench = false
 
 [[bench]]
 name = "plan"

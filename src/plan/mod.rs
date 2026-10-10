@@ -185,21 +185,35 @@ impl<'t> Document<'t> {
     /// A file is CRLF when every line ending in it is CRLF; a file mixing the two is LF,
     /// its carriage returns kept as content, so each line is written back as it was.
     fn new(text: &'t str) -> Self {
-        let newline_count = text.matches('\n').count();
-        let crlf = newline_count > 0 && text.matches("\r\n").count() == newline_count;
-        let eol = if crlf { "\r\n" } else { "\n" };
-        let mut lines = Vec::with_capacity(newline_count);
+        let bytes = text.as_bytes();
+        let mut lines = Vec::new();
+        let mut every_ending_crlf = true;
         let mut start = 0;
         for (index, _) in text.match_indices('\n') {
-            let content_end = if crlf { before(index) } else { index };
+            let Some(content) = bytes.get(start..index) else {
+                unreachable!("a newline lies at or after the start of its line");
+            };
+            every_ending_crlf = every_ending_crlf && content.ends_with(b"\r");
             let end = after(index);
             lines.push(LineSpan {
                 start,
-                content_end,
+                content_end: index,
                 end,
             });
             start = end;
         }
+        let crlf = every_ending_crlf && !lines.is_empty();
+        if crlf {
+            for span in &mut lines {
+                span.content_end = before(span.content_end);
+                assert_eq!(
+                    bytes.get(span.content_end),
+                    Some(&b'\r'),
+                    "a CRLF line's content ends at its carriage return"
+                );
+            }
+        }
+        let eol = if crlf { "\r\n" } else { "\n" };
         if start < text.len() {
             lines.push(LineSpan {
                 start,
@@ -417,15 +431,17 @@ impl<'m, 't> BlockMatcher<'m, 't> {
     /// ends at the first line its next segment matches from.
     fn match_at(&mut self, start: usize) -> Option<Vec<Range<usize>>> {
         let segments = self.segments;
+        let Some((leading, following)) = segments.split_first() else {
+            unreachable!("a block holds at least one segment");
+        };
+        if !segment_at(self.document, leading, start) {
+            return None;
+        }
         let mut ranges = Vec::with_capacity(segments.len());
-        let mut position = start;
-        for (index, segment) in segments.iter().enumerate() {
-            let found = if index == 0 {
-                segment_at(self.document, segment, position).then_some(position)
-            } else {
-                self.first_from(index, position)
-            };
-            let begin = found?;
+        let mut position = offset(start, leading.len());
+        ranges.push(start..position);
+        for (index, segment) in following.iter().enumerate() {
+            let begin = self.first_from(after(index), position)?;
             let end = offset(begin, segment.len());
             ranges.push(begin..end);
             position = end;

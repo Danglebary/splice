@@ -30,7 +30,7 @@ struct Call {
     exit_code: u8,
 }
 
-const CALLS: [Call; 3] = [
+const CALLS: [Call; 4] = [
     Call {
         name: "version",
         arguments: &["--version"],
@@ -41,6 +41,12 @@ const CALLS: [Call; 3] = [
         name: "guard-allow",
         arguments: &["guard"],
         input: r#"{"tool_name":"Bash","tool_input":{"command":"ls -la"}}"#,
+        exit_code: exit_code::SUCCESS,
+    },
+    Call {
+        name: "guard-redirect",
+        arguments: &["guard"],
+        input: r#"{"tool_name":"Bash","tool_input":{"command":"cargo test --quiet 2>&1 | tail -5"}}"#,
         exit_code: exit_code::SUCCESS,
     },
     Call {
@@ -103,8 +109,11 @@ fn edit_by_length(criterion: &mut Criterion) {
 /// Spawns the binary with `arguments`, writes `input` to its stdin, and returns the code
 /// it exits with, or `None` when a signal ends it.
 fn exit_code_of(arguments: &[&str], input: &str) -> Option<i32> {
+    // The child runs under the C library's default allocator settings, as an agent's call
+    // does, whatever thresholds this bench process runs under.
     let spawned = Command::new(BINARY)
         .args(arguments)
+        .env_remove("GLIBC_TUNABLES")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
