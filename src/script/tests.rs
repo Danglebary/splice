@@ -252,8 +252,11 @@ mod given_literal_hunks_that_cannot_change_anything_as_written {
     }
 
     #[test]
-    fn when_parsed_holding_only_context_lines_then_it_is_refused_as_changing_nothing() {
-        assert_eq!(fault_of("=== a\n@@\n x\n y\n"), (2, Fault::ChangesNothing));
+    fn when_parsed_holding_only_context_lines_then_it_is_refused_as_holding_context_alone() {
+        assert_eq!(
+            fault_of("=== a\n@@\n x\n y\n"),
+            (2, Fault::OnlyContextLines)
+        );
     }
 }
 

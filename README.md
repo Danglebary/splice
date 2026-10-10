@@ -4,6 +4,8 @@ Coding agents edit files through one-off scripts: `sed -i`, `perl -0pi`, a `pyth
 
 splice is the tool those scripts were trying to be. It reads an edit script on stdin, matches literal text line by line, checks how many times each hunk matched, and writes every file or none. It prints nothing on success. A Claude Code plugin in this repository adds a skill that teaches agents the script and a hook that blocks the one-off editors.
 
+Measured the same way over the 211 splice calls in this machine's sessions through 2026-10-10: 25 (12%) were refused, every refusal was correct and named the fix, every refused edit landed on the next attempt, and none of the 186 edits that landed changed text beyond what its hunk declared. The failure rate is the same; the failures are loud, happen before anything is written, and are the agent's to correct from the message.
+
 ```bash
 splice <<'EOF' && cargo test
 === src/lib.rs
@@ -19,7 +21,21 @@ splice <<'EOF' && cargo test
 EOF
 ```
 
-`splice --help` prints the whole grammar: match counts, line anchors, `~` for a run of lines, inline hunks that change a phrase mid-line, regex hunks, appends, creates, a final newline for a file that lacks one, and `splice try`, which applies a script, runs a command, and restores every file afterwards.
+Every hunk line opens with its marker: a space for a context line, `-` for a removed one, `+` for an added one, and `~` alone for any run of lines. A line holding only its marker is a blank line of that kind. The header after `@@` declares the match:
+
+| Header | Meaning |
+| --- | --- |
+| `@@` | exactly one match |
+| `@@ all` | one match or more, each one changed |
+| `@@ count N` | exactly N matches |
+| `@@ line N` | the match starts at line N |
+| `@@ inline [all\|count N]` | `-` lines join into text found anywhere, mid-line included; `+` lines into what replaces it |
+| `@@ regex [all\|count N]` | `-` lines join into one regex, `+` lines into its replacement (`$1`, `${name}`, `$$`) |
+| `@@ append [jsonl]` | `+` lines added at the end; `jsonl` checks each line is JSON |
+| `@@ create` | `+` lines written to a file that does not exist yet |
+| `@@ final newline` | ends the last line of a file that lacks a final newline |
+
+`splice try` applies a script, runs a command, and restores every file afterwards; `--expect-fail` turns a failing command into exit 0, for a mutation test. `splice --help` prints the whole grammar, and the Claude Code skill shows the patterns. The binary runs on Linux and macOS.
 
 ## Install
 

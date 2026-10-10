@@ -30,6 +30,8 @@ A test is a function named `when_<operation>_then_<result>` in a module named `g
 
 The hook's verdict was checked against every Bash command in this machine's Claude Code transcripts; when `guard` changes, rerun that check rather than trusting the unit rows alone: feed each command through `splice guard` as hook JSON and read what it blocks.
 
+The README's measured outcome comes from the same transcripts: every Bash call whose command runs `splice` with a script, joined to its result. Count refusals by the `splice:` lines in the result text, never by the harness's error flag, which a trailing `echo $?` or a `;`-chained command hides them from. Redo the count when the README's number is touched.
+
 ## Releases
 
 Raise `version` in `Cargo.toml` and in `claude-code/splice/.claude-plugin/plugin.json` together and merge to `main`. `.github/workflows/release.yml` publishes a release when the version has no release yet and builds nothing otherwise. Once it publishes, it sends Danglebary/dotfiles an `input-released` repository dispatch carrying the input name, the version, and the released commit, with the `DOTFILES_TOKEN` secret. Archives are named by target alone, which `install.sh` depends on.

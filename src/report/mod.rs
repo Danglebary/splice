@@ -12,9 +12,10 @@ splice: apply literal, count-checked edits to text files, all of them or none.
 
 Usage:
   splice [--diff] [--dry-run] [--script PATH]
-      Apply the script read from stdin, or from PATH.
+      Apply the script read from stdin, or from PATH; `-` is stdin.
   splice try [--expect-fail] [--diff] [--script PATH] -- COMMAND [ARGS...]
-      Apply the script, run COMMAND, then restore every file it touched.
+      Apply the script, run COMMAND, then restore every file it touched. --expect-fail
+      exits 0 when COMMAND fails, for any reason, and 4 when it passes.
   splice guard
       Claude Code PreToolUse hook: reads the hook's JSON on stdin and blocks a Bash
       command that edits a file through sed -i, perl -i, a Python or Node write, or a
@@ -62,8 +63,9 @@ join at that line break too. Every hunk matches the file as it was before any hu
 applied, so line numbers stay valid across a batch and hunks must not overlap. A hunk
 that would leave its file unchanged is refused, and so are hunks that together would.
 A file that lacks a final newline keeps lacking one unless `@@ final newline` adds it.
-Blank lines at a hunk's edges are dropped; write a lone space for a blank context line
-there.
+A line holding only its marker is a blank line of that kind: a lone space is a blank
+context line, `-` a blank removed line, `+` a blank added line. A line with no marker
+at all is dropped at a hunk's edges and is a blank context line inside it.
 
 Exit status:
   0  every file written
@@ -111,8 +113,17 @@ fn fault(fault: &Fault) -> String {
             "the hunk has no context or removed line to match; `@@ append` and `@@ create` add without matching"
                 .to_owned()
         }
-        Fault::ChangesNothing => "the hunk removes and adds nothing".to_owned(),
-        Fault::ElisionWithoutLineAbove => "`~` needs a context or removed line directly above it".to_owned(),
+        Fault::OnlyContextLines => {
+            "the hunk holds context lines alone, so it changes nothing; lines added after an \
+             anchor are written as `+` lines directly under it, in the same hunk"
+                .to_owned()
+        }
+        Fault::ChangesNothing => "the replacement equals the text, so the hunk changes nothing".to_owned(),
+        Fault::ElisionWithoutLineAbove => {
+            "`~` goes directly under a context or removed line, never under a `+` line; the `+` \
+             lines follow the `~`"
+                .to_owned()
+        }
         Fault::ElisionWithoutLineBelow => "`~` needs a context or removed line below it to end the run".to_owned(),
         Fault::RegexWithoutPattern => "a regex hunk needs '-' lines holding its pattern".to_owned(),
         Fault::RegexWithContext => "a regex hunk holds '-' pattern lines and '+' replacement lines alone".to_owned(),
@@ -233,6 +244,11 @@ fn near_miss(near: &NearMiss) -> String {
         NearMiss::Whitespace { file_line } => {
             format!(
                 "  closest: file line {file_line} matches the hunk's first line except for surrounding whitespace\n"
+            )
+        }
+        NearMiss::Inside { file_line } => {
+            format!(
+                "  closest: file line {file_line} holds the hunk's first line inside it; `@@ inline` matches text mid-line\n"
             )
         }
         NearMiss::AfterElision { file_line } => format!(

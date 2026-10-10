@@ -39,6 +39,14 @@ mod given_no_subcommand {
     }
 
     #[test]
+    fn when_parsed_holding_a_dash_as_the_script_path_then_the_script_is_read_from_stdin() {
+        assert_eq!(
+            parsed(&["--script", "-"]),
+            Ok(Command::Apply(Options::default()))
+        );
+    }
+
+    #[test]
     fn when_parsed_holding_an_unknown_flag_then_it_is_refused() {
         assert_eq!(
             parsed(&["-i"]),

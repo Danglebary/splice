@@ -209,6 +209,17 @@ mod given_a_script_whose_hunks_all_match {
         assert_eq!(output.status.code(), Some(0));
         assert_eq!(scratch.read("a.txt"), "y\n");
     }
+
+    #[test]
+    fn when_applied_from_a_dash_script_path_then_the_script_is_read_from_stdin() {
+        let scratch = Scratch::new();
+        scratch.write("a.txt", "x\n");
+
+        let output = scratch.run(&["--script", "-"], "=== a.txt\n@@\n-x\n+y\n");
+
+        assert_eq!(output.status.code(), Some(0));
+        assert_eq!(scratch.read("a.txt"), "y\n");
+    }
 }
 
 mod given_a_script_with_one_hunk_that_does_not_match {
@@ -240,6 +251,22 @@ mod given_a_script_with_one_hunk_that_does_not_match {
 
         assert_eq!(output.status.code(), Some(1));
         assert_eq!(scratch.read("a.txt"), "x\ny\n");
+    }
+}
+
+mod given_a_script_path_that_does_not_exist {
+    use super::*;
+
+    #[test]
+    fn when_applied_then_it_exits_with_the_io_code_naming_the_path() {
+        let scratch = Scratch::new();
+        scratch.write("a.txt", "x\n");
+
+        let output = scratch.run(&["--script", "missing.splice"], "");
+
+        assert_eq!(output.status.code(), Some(3));
+        assert!(stderr(&output).contains("missing.splice"));
+        assert_eq!(scratch.read("a.txt"), "x\n");
     }
 }
 
