@@ -36,9 +36,12 @@
           # Set inside this shell alone, so a recipe can tell it already stands in it
           # and need not enter it again.
           SPLICE_SHELL = "1";
+          # samply records a benchmark under the profiling profile and serves what it
+          # recorded to the browser's profiler view on the local machine.
           packages = [
             (toolchainFor pkgs)
             pkgs.just
+            pkgs.samply
           ];
         };
       # The binary, built by the pinned toolchain from the manifest, its lock, and the

@@ -28,6 +28,10 @@ harness = false
 name = "guard"
 harness = false
 
+[[bench]]
+name = "process"
+harness = false
+
 [lints.rust]
 unsafe_code = "forbid"
 
@@ -80,3 +84,12 @@ lto = "thin"
 codegen-units = 1
 panic = "abort"
 overflow-checks = true
+
+# The profiling profile is the release binary with its symbols and line tables kept, so
+# a sampling profiler attributes time to the code that ships rather than to a debug
+# build whose costs differ. `strip = "none"` overrides the release strip, which would
+# leave a profile of bare addresses.
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
+strip = "none"
