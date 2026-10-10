@@ -32,4 +32,4 @@ The hook's verdict was checked against every Bash command in this machine's Clau
 
 ## Releases
 
-Raise `version` in `Cargo.toml` and in `claude-code/splice/.claude-plugin/plugin.json` together and merge to `main`. `.github/workflows/release.yml` publishes a release when the version has no release yet and builds nothing otherwise. Archives are named by target alone, which `install.sh` depends on.
+Raise `version` in `Cargo.toml` and in `claude-code/splice/.claude-plugin/plugin.json` together and merge to `main`. `.github/workflows/release.yml` publishes a release when the version has no release yet and builds nothing otherwise. Once it publishes, it sends Danglebary/dotfiles an `input-released` repository dispatch carrying the input name, the version, and the released commit, with the `DOTFILES_TOKEN` secret. Archives are named by target alone, which `install.sh` depends on.
