@@ -12,7 +12,7 @@ splice: apply literal, count-checked edits to text files, all of them or none.
 
 Usage:
   splice [--diff] [--dry-run] [--script PATH]
-      Apply the script read from stdin, or from PATH.
+      Apply the script read from stdin, or from PATH; `-` is stdin.
   splice try [--expect-fail] [--diff] [--script PATH] -- COMMAND [ARGS...]
       Apply the script, run COMMAND, then restore every file it touched.
   splice guard
@@ -111,8 +111,17 @@ fn fault(fault: &Fault) -> String {
             "the hunk has no context or removed line to match; `@@ append` and `@@ create` add without matching"
                 .to_owned()
         }
-        Fault::ChangesNothing => "the hunk removes and adds nothing".to_owned(),
-        Fault::ElisionWithoutLineAbove => "`~` needs a context or removed line directly above it".to_owned(),
+        Fault::OnlyContextLines => {
+            "the hunk holds context lines alone, so it changes nothing; lines added after an \
+             anchor are written as `+` lines directly under it, in the same hunk"
+                .to_owned()
+        }
+        Fault::ChangesNothing => "the replacement equals the text, so the hunk changes nothing".to_owned(),
+        Fault::ElisionWithoutLineAbove => {
+            "`~` goes directly under a context or removed line, never under a `+` line; the `+` \
+             lines follow the `~`"
+                .to_owned()
+        }
         Fault::ElisionWithoutLineBelow => "`~` needs a context or removed line below it to end the run".to_owned(),
         Fault::RegexWithoutPattern => "a regex hunk needs '-' lines holding its pattern".to_owned(),
         Fault::RegexWithContext => "a regex hunk holds '-' pattern lines and '+' replacement lines alone".to_owned(),

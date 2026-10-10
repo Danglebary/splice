@@ -130,3 +130,32 @@ mod given_a_denied_command {
         assert!(message.contains("`sed -i`"));
     }
 }
+
+mod given_a_fault_an_agent_fixes_by_moving_its_added_lines {
+    use super::*;
+
+    #[test]
+    fn when_a_context_only_hunk_is_rendered_then_it_says_where_the_added_lines_go() {
+        let error = ScriptError {
+            line: 4,
+            fault: Fault::OnlyContextLines,
+        };
+
+        let message = script_error(&error);
+
+        assert!(message.contains("script line 4"));
+        assert!(message.contains("`+` lines directly under"));
+    }
+
+    #[test]
+    fn when_an_elision_under_an_added_line_is_rendered_then_it_names_the_added_line() {
+        let error = ScriptError {
+            line: 4,
+            fault: Fault::ElisionWithoutLineAbove,
+        };
+
+        let message = script_error(&error);
+
+        assert!(message.contains("never under a `+` line"));
+    }
+}

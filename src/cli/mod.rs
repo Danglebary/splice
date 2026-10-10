@@ -87,7 +87,12 @@ fn parse_flags(words: &[&str]) -> Result<(Options, bool, Vec<String>), UsageFaul
                 let Some((path, after_path)) = rest.split_first() else {
                     return Err(UsageFault::MissingValue((*first).to_owned()));
                 };
-                options.script = Some((*path).to_owned());
+                // `-` names stdin, as it does for most tools that take a file argument.
+                if *path == "-" {
+                    options.script = None;
+                } else {
+                    options.script = Some((*path).to_owned());
+                }
                 rest = after_path;
             }
             "--" => {

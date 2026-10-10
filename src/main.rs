@@ -283,7 +283,11 @@ fn read_script(options: &Options) -> Result<Script, u8> {
             return Err(exit_code::USAGE);
         }
         Err(error) => {
-            eprint!("{}", report::script_unreadable(&error.to_string()));
+            let detail = match &options.script {
+                Some(path) => format!("{path}: {error}"),
+                None => error.to_string(),
+            };
+            eprint!("{}", report::script_unreadable(&detail));
             return Err(exit_code::IO);
         }
     };

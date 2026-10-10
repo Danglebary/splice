@@ -139,23 +139,35 @@ pub enum Fault {
     LineBeforeFirstFile,
     LineBeforeFirstHunk,
     EmptyPath,
-    PathRepeated { first_line: usize },
+    PathRepeated {
+        first_line: usize,
+    },
     FileWithoutHunks,
-    UnknownHeader { header: String },
-    InvalidNumber { word: String },
+    UnknownHeader {
+        header: String,
+    },
+    InvalidNumber {
+        word: String,
+    },
     UnexpectedLine,
     NoAnchor,
+    /// A literal hunk holding context lines alone, which can only keep what it matches.
+    OnlyContextLines,
     ChangesNothing,
     ElisionWithoutLineAbove,
     ElisionWithoutLineBelow,
     RegexWithoutPattern,
     RegexWithContext,
-    RegexInvalid { message: String },
+    RegexInvalid {
+        message: String,
+    },
     InlineWithoutText,
     InlineWithContext,
     OnlyAddedLines,
     AppendEmpty,
-    JsonlInvalid { message: String },
+    JsonlInvalid {
+        message: String,
+    },
     CreateNotAlone,
     FinalNewlineWithLines,
 }
@@ -526,7 +538,7 @@ fn build_literal(
     if !changes {
         return Err(ScriptError {
             line: header_line,
-            fault: Fault::ChangesNothing,
+            fault: Fault::OnlyContextLines,
         });
     }
     Ok(Operation::Literal { block, expectation })

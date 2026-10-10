@@ -4,6 +4,8 @@ Coding agents edit files through one-off scripts: `sed -i`, `perl -0pi`, a `pyth
 
 splice is the tool those scripts were trying to be. It reads an edit script on stdin, matches literal text line by line, checks how many times each hunk matched, and writes every file or none. It prints nothing on success. A Claude Code plugin in this repository adds a skill that teaches agents the script and a hook that blocks the one-off editors.
 
+Measured the same way over the 211 splice calls in this machine's sessions through 2026-10-10: 25 (12%) were refused, every refusal was correct and named the fix, every refused edit landed on the next attempt, and none of the 186 edits that landed changed text beyond what its hunk declared. The failure rate is the same; the failures are loud, happen before anything is written, and are the agent's to correct from the message.
+
 ```bash
 splice <<'EOF' && cargo test
 === src/lib.rs
