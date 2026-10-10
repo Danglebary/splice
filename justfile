@@ -25,6 +25,12 @@ check-claude-code:
     claude plugin validate --strict .
     claude plugin validate --strict claude-code/splice
 
+# The benchmarks, which stand outside the gate because wall-clock timings vary between
+# runs and machines. Arguments pass to `cargo bench`, and those after `--` to criterion,
+# such as a filter or `--save-baseline <name>`.
+bench *ARGS:
+    @{{in_shell}} cargo bench "$@"
+
 # Installs the binary onto the machine's path with cargo, from this checkout.
 install:
     cargo install --locked --path .

@@ -1,6 +1,6 @@
 [package]
 name = "splice"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 # The least compiler the crate is built with, the stable release `rust-toolchain.toml`
 # pins rather than the floor a dependency declares.
@@ -14,6 +14,19 @@ regex = "1.13.1"
 serde_json = "1.0.151"
 signal-hook = "0.4.5"
 similar = "3.2.0"
+
+# Criterion's default features add rayon and plotters, which parallelize its analysis
+# and draw its charts; the benches read neither, so only its cargo harness is taken.
+[dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "plan"
+harness = false
+
+[[bench]]
+name = "guard"
+harness = false
 
 [lints.rust]
 unsafe_code = "forbid"
