@@ -385,29 +385,82 @@ fn segment_at(document: &Document<'_>, segment: &[&str], start: usize) -> bool {
         .all(|(position, expected)| document.content(offset(start, position)) == Some(*expected))
 }
 
-/// The line ranges of each segment when the block matches from `start`; each elision
-/// ends at the first line its next segment matches from.
-fn match_at(
-    document: &Document<'_>,
-    segments: &[Vec<&str>],
-    start: usize,
-) -> Option<Vec<Range<usize>>> {
-    let mut ranges = Vec::with_capacity(segments.len());
-    let mut position = start;
-    for (index, segment) in segments.iter().enumerate() {
-        let found = if index == 0 {
-            segment_at(document, segment, position).then_some(position)
-        } else {
-            (position..document.line_count())
-                .find(|candidate| segment_at(document, segment, *candidate))
-        };
-        let begin = found?;
-        let end = offset(begin, segment.len());
-        ranges.push(begin..end);
-        position = end;
+/// The last search for one segment below an elision: the line it began at, and the
+/// first line at or after it where the segment matches.
+#[derive(Clone, Copy)]
+struct Search {
+    from: usize,
+    found: Option<usize>,
+}
+
+/// Matches a block from one start after another, in ascending order. The line each
+/// segment below an elision is searched from then never moves back, so a segment's last
+/// search answers the next one whenever the line it found lies at or past the new
+/// starting line, and each segment's scan crosses the file once.
+struct BlockMatcher<'m, 't> {
+    document: &'m Document<'t>,
+    segments: &'m [Vec<&'m str>],
+    searches: Vec<Option<Search>>,
+}
+
+impl<'m, 't> BlockMatcher<'m, 't> {
+    fn new(document: &'m Document<'t>, segments: &'m [Vec<&'m str>]) -> Self {
+        assert!(!segments.is_empty(), "a block holds at least one segment");
+        Self {
+            document,
+            segments,
+            searches: vec![None; segments.len()],
+        }
     }
-    assert_eq!(ranges.len(), segments.len(), "a match places every segment");
-    Some(ranges)
+
+    /// The line ranges of each segment when the block matches from `start`; each elision
+    /// ends at the first line its next segment matches from.
+    fn match_at(&mut self, start: usize) -> Option<Vec<Range<usize>>> {
+        let segments = self.segments;
+        let mut ranges = Vec::with_capacity(segments.len());
+        let mut position = start;
+        for (index, segment) in segments.iter().enumerate() {
+            let found = if index == 0 {
+                segment_at(self.document, segment, position).then_some(position)
+            } else {
+                self.first_from(index, position)
+            };
+            let begin = found?;
+            let end = offset(begin, segment.len());
+            ranges.push(begin..end);
+            position = end;
+        }
+        assert_eq!(ranges.len(), segments.len(), "a match places every segment");
+        Some(ranges)
+    }
+
+    /// The first line at or after `position` where the segment at `index` matches.
+    fn first_from(&mut self, index: usize, position: usize) -> Option<usize> {
+        let Some(last) = self.searches.get_mut(index) else {
+            unreachable!("a search is kept for every segment");
+        };
+        if let Some(search) = *last {
+            assert!(
+                search.from <= position,
+                "a segment is never searched from above its last search"
+            );
+            match search.found {
+                None => return None,
+                Some(found) if found >= position => return Some(found),
+                Some(_) => {}
+            }
+        }
+        let Some(segment) = self.segments.get(index) else {
+            unreachable!("a searched segment lies inside the block");
+        };
+        let found = (position..self.document.line_count())
+            .find(|candidate| segment_at(self.document, segment, *candidate));
+        *last = Some(Search {
+            from: position,
+            found,
+        });
+        found
+    }
 }
 
 /// Picks the matches an expectation declares, each paired with its one-based line.
@@ -453,18 +506,21 @@ fn literal_edits(
     expectation: Expectation,
 ) -> Result<Vec<Replacement>, Reason> {
     let segments = segments(block);
+    let mut block_matcher = BlockMatcher::new(document, &segments);
     let mut matches: Vec<(usize, Vec<Range<usize>>)> = Vec::new();
     let mut claimed_until = 0;
     for start in 0..document.line_count() {
-        let Some(ranges) = match_at(document, &segments, start) else {
+        if matches!(expectation, Expectation::All) {
+            if start < claimed_until {
+                continue;
+            }
+        }
+        let Some(ranges) = block_matcher.match_at(start) else {
             continue;
         };
         let Some(end) = ranges.last().map(|range| range.end) else {
             unreachable!("a match holds a range per segment");
         };
-        if matches!(expectation, Expectation::All) && start < claimed_until {
-            continue;
-        }
         claimed_until = end;
         matches.push((after(start), ranges));
     }

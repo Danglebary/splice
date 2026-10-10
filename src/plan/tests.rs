@@ -269,6 +269,45 @@ mod given_an_elision {
             }]
         ));
     }
+
+    #[test]
+    fn when_planned_from_two_openings_above_one_closing_line_then_it_is_refused_naming_both() {
+        let reasons = refused(Some("open\nopen\nbody\nclose\n"), "@@\n-open\n~\n-close\n");
+
+        assert_eq!(
+            reasons,
+            vec![Reason::Count {
+                expected: Expectation::Once,
+                found: 2,
+                found_lines: vec![1, 2],
+                near_miss: None
+            }]
+        );
+    }
+
+    #[test]
+    fn when_planned_from_an_opening_below_the_only_closing_line_then_it_matches_nothing() {
+        let text = applied("open\none\nclose\nopen\ntwo\n", "@@\n-open\n~\n-close\n");
+
+        assert_eq!(text, "open\ntwo\n");
+    }
+
+    #[test]
+    fn when_planned_holding_all_over_two_blocks_then_each_block_is_replaced() {
+        let text = applied(
+            "open\none\nclose\nopen\ntwo\nclose\n",
+            "@@ all\n-open\n~\n-close\n+gone\n",
+        );
+
+        assert_eq!(text, "gone\ngone\n");
+    }
+
+    #[test]
+    fn when_planned_with_two_elisions_then_each_segment_is_found_below_the_one_before() {
+        let text = applied("b\na\nx\nb\ny\nc\n", "@@\n a\n~\n b\n~\n-c\n+C\n");
+
+        assert_eq!(text, "b\na\nx\nb\ny\nC\n");
+    }
 }
 
 mod given_a_regex_hunk {
