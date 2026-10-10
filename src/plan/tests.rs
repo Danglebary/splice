@@ -49,6 +49,33 @@ mod given_a_hunk_matching_once {
     }
 
     #[test]
+    fn when_planned_over_a_file_mixing_crlf_and_lf_then_each_line_keeps_its_own_ending() {
+        // A mixed file reads as LF, so `b` matches its bare line and the CRLF lines keep
+        // their carriage returns as content.
+        let text = applied("a\r\nb\nc\r\n", "@@\n-b\n+B\n");
+
+        assert_eq!(text, "a\r\nB\nc\r\n");
+    }
+
+    #[test]
+    fn when_planned_at_the_last_line_of_a_crlf_file_without_a_final_newline_then_none_is_added() {
+        // The unterminated last line of a CRLF file keeps all of its content, and no
+        // ending is added after it.
+        let text = applied("a\r\nb", "@@\n a\n-b\n+B\n");
+
+        assert_eq!(text, "a\r\nB");
+    }
+
+    #[test]
+    fn when_planned_over_a_file_opening_with_an_empty_lf_line_then_added_lines_end_in_lf() {
+        // A newline at the first byte has no carriage return before it, so the file reads
+        // as LF even though every later ending is CRLF.
+        let text = applied("\nb\r\n", "@@\n \n+x\n");
+
+        assert_eq!(text, "\nx\nb\r\n");
+    }
+
+    #[test]
     fn when_planned_at_the_last_line_of_a_file_without_a_final_newline_then_none_is_added() {
         let text = applied("a\nb", "@@\n a\n-b\n+B\n");
 
