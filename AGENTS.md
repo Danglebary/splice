@@ -14,6 +14,8 @@ The engineering style guide at `~/.claude/CLAUDE.md` governs. This file states o
 
 The toolchain is pinned once, in `rust-toolchain.toml`, which both the flake and CI's rustup read.
 
+CI also builds the flake's package on Linux and macOS. It compiles from the file set `flake.nix` lists, so a file the manifest names outside `src/`, such as a declared bench, joins that set.
+
 ## Shape
 
 `src/lib.rs` is the functional core and does no IO: the script grammar (`script`), matching and splicing one file's text (`plan`), the diff (`diff`), the hook's verdict (`guard`), the argument grammar (`cli`), every message (`report`), and the exit codes (`exit_code`). `src/main.rs` is the shell: it reads the script and the files, writes atomically, runs the command under `try`, and maps outcomes to exit codes. A new decision goes in the library with a unit test; `main.rs` holds wiring, which `tests/cli.rs` covers against real files.
