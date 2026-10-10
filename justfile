@@ -45,17 +45,19 @@ check-claude-code:
 bench *ARGS:
     @{{in_shell}} env "GLIBC_TUNABLES={{malloc_tunables}}" cargo bench "$@"
 
-# Records one bench under samply: `just profile plan elision-to-absent-line/120001`. The
-# bench is built under the profiling profile, so its frames carry names, and cargo runs it
-# through samply, which records it and every process it starts. criterion's
-# `--profile-time` runs the cases the filter matches without analysis, under the malloc
-# thresholds `bench` times them with, and the recording lands at
-# `target/profiling/<bench>.json`. On Linux samply reads perf events, which an
+# Records one bench under samply and prints where its samples fall:
+# `just profile plan elision-to-absent-line/120001`. The bench is built under the
+# profiling profile, so its frames carry names, and on Linux it is linked with a GNU
+# build-id, which samply finds a file's symbols by. cargo runs it through tally, which
+# records it and every process it starts under samply and prints each function's share
+# of the samples. criterion's `--profile-time` runs the cases the filter matches without
+# analysis, under the malloc thresholds `bench` times them with, and the recording lands
+# at `target/profiling/<bench>.json`. On Linux samply reads perf events, which an
 # unprivileged user may open only while `kernel.perf_event_paranoid` is 1 or lower, and
 # maps a 1,028 KiB ring buffer per CPU, which can fail with `mmap failed` on a host of
 # many CPUs until `kernel.perf_event_mlock_kb` is at least 1028.
 profile BENCH FILTER:
-    {{in_shell}} env "GLIBC_TUNABLES={{malloc_tunables}}" cargo bench --profile profiling --bench "$1" --config "target.'cfg(all())'.runner = ['samply', 'record', '--save-only', '--output', 'target/profiling/$1.json', '--']" -- --profile-time {{profile_seconds}} "$2"
+    {{in_shell}} env "GLIBC_TUNABLES={{malloc_tunables}}" cargo bench --profile profiling --bench "$1" --config "target.'cfg(target_os = \"linux\")'.rustflags = ['-C', 'link-arg=-Wl,--build-id']" --config "target.'cfg(all())'.runner = ['tally', 'record', '--output', 'target/profiling/$1.json', '--']" -- --profile-time {{profile_seconds}} "$2"
 
 # Opens a bench's last recording in the profiler's browser view, served from this machine.
 profile-view BENCH:

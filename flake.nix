@@ -7,10 +7,18 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # tally keeps its own nixpkgs rather than following this one, so the samply it runs
+    # is the one its lock pins against the sidecar format it reads.
+    tally.url = "github:Danglebary/tally";
   };
 
   outputs =
-    { nixpkgs, rust-overlay, ... }:
+    {
+      nixpkgs,
+      rust-overlay,
+      tally,
+      ...
+    }:
     let
       systems = [
         "aarch64-darwin"
@@ -36,12 +44,14 @@
           # Set inside this shell alone, so a recipe can tell it already stands in it
           # and need not enter it again.
           SPLICE_SHELL = "1";
-          # samply records a benchmark under the profiling profile and serves what it
-          # recorded to the browser's profiler view on the local machine.
+          # tally records a benchmark under the profiling profile and prints where its
+          # samples fall; samply serves the recording to the browser's profiler view on
+          # the local machine.
           packages = [
             (toolchainFor pkgs)
             pkgs.just
             pkgs.samply
+            tally.packages.${system}.default
           ];
         };
       # The binary, built by the pinned toolchain from the manifest, its lock, the crate's
