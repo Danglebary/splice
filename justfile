@@ -6,6 +6,10 @@ set positional-arguments
 # rather than the project's.
 in_shell := if env("SPLICE_SHELL", "") == "1" { "" } else { "nix develop --command" }
 
+# How long `just profile` runs the cases it records: long enough for thousands of samples
+# at samply's default rate of one per millisecond.
+profile_seconds := "5"
+
 # The `splice` binary built from the tree, its arguments passed through whole.
 splice *ARGS:
     @{{in_shell}} cargo run --quiet -- "$@"
@@ -30,6 +34,21 @@ check-claude-code:
 # such as a filter or `--save-baseline <name>`.
 bench *ARGS:
     @{{in_shell}} cargo bench "$@"
+
+# Records one bench under samply: `just profile plan elision-to-absent-line/120001`. The
+# bench is built under the profiling profile, so its frames carry names, and cargo runs it
+# through samply, which records it and every process it starts. criterion's
+# `--profile-time` runs the cases the filter matches without analysis, and the recording
+# lands at `target/profiling/<bench>.json`. On Linux samply reads perf events, which an
+# unprivileged user may open only while `kernel.perf_event_paranoid` is 1 or lower, and
+# maps a 1,028 KiB ring buffer per CPU, which can fail with `mmap failed` on a host of
+# many CPUs until `kernel.perf_event_mlock_kb` is at least 1028.
+profile BENCH FILTER:
+    {{in_shell}} cargo bench --profile profiling --bench "$1" --config "target.'cfg(all())'.runner = ['samply', 'record', '--save-only', '--output', 'target/profiling/$1.json', '--']" -- --profile-time {{profile_seconds}} "$2"
+
+# Opens a bench's last recording in the profiler's browser view, served from this machine.
+profile-view BENCH:
+    {{in_shell}} samply load "target/profiling/$1.json"
 
 # Installs the binary onto the machine's path with cargo, from this checkout.
 install:
