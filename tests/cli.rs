@@ -178,6 +178,17 @@ mod given_a_script_whose_hunks_all_match {
     }
 
     #[test]
+    fn when_applied_with_create_then_the_file_takes_the_mode_a_new_file_gets() {
+        let scratch = Scratch::new();
+        let reference = scratch.write("reference.txt", "");
+
+        scratch.run(&[], "=== new.txt\n@@ create\n+a\n");
+
+        let mode_of = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode_of(&scratch.root.join("new.txt")), mode_of(&reference));
+    }
+
+    #[test]
     fn when_applied_with_create_under_a_new_directory_then_the_directory_and_file_are_made() {
         let scratch = Scratch::new();
 
@@ -284,6 +295,42 @@ mod given_a_script_naming_a_file_that_cannot_be_written {
         assert_eq!(output.status.code(), Some(3));
         assert!(!scratch.exists("ran"));
         assert_eq!(scratch.read("first.txt"), "x\n");
+    }
+}
+
+mod given_a_temporary_name_already_taken {
+    use super::*;
+
+    /// As many names beside a file as splice tries for a temporary.
+    const TEMPORARY_NAMES_MAX: usize = 16;
+
+    #[test]
+    fn when_applied_with_a_link_at_the_temporary_name_then_the_link_target_is_left_alone() {
+        let scratch = Scratch::new();
+        scratch.write("a.txt", "x\n");
+        scratch.write("victim.txt", "v\n");
+        std::os::unix::fs::symlink("victim.txt", scratch.root.join(".a.txt.splice")).unwrap();
+
+        let output = scratch.run(&[], "=== a.txt\n@@\n-x\n+y\n");
+
+        assert_eq!(output.status.code(), Some(0));
+        assert_eq!(scratch.read("victim.txt"), "v\n");
+        assert_eq!(scratch.read("a.txt"), "y\n");
+    }
+
+    #[test]
+    fn when_applied_with_every_temporary_name_taken_then_nothing_is_written() {
+        let scratch = Scratch::new();
+        scratch.write("a.txt", "x\n");
+        scratch.write(".a.txt.splice", "");
+        for attempt in 1..TEMPORARY_NAMES_MAX {
+            scratch.write(&format!(".a.txt.splice-{attempt}"), "");
+        }
+
+        let output = scratch.run(&[], "=== a.txt\n@@\n-x\n+y\n");
+
+        assert_eq!(output.status.code(), Some(3));
+        assert_eq!(scratch.read("a.txt"), "x\n");
     }
 }
 

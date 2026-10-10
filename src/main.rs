@@ -2,9 +2,10 @@
 //! command under `try`, and turns every outcome into an exit code. Every decision it acts
 //! on is made by the library.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{self, ExitCode, ExitStatus, Stdio};
@@ -24,6 +25,16 @@ const SCRIPT_BYTES_MAX: u64 = 16_777_216;
 const FILE_BYTES_MAX: u64 = 67_108_864;
 /// The largest hook input read.
 const HOOK_INPUT_BYTES_MAX: u64 = 4_194_304;
+/// How many names beside a file are tried for its temporary before staging gives up:
+/// enough to step past the leftovers of a few interrupted runs, and a bound on a
+/// directory someone has filled with them.
+const TEMPORARY_NAMES_MAX: usize = 16;
+/// The mode a temporary holding an existing file's text is created with, readable by its
+/// owner alone until it takes the original's permissions.
+const PRIVATE_FILE_MODE: u32 = 0o600;
+/// The mode a new file is created with before the umask applies, the one
+/// `File::create` uses.
+const NEW_FILE_MODE: u32 = 0o666;
 
 fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
@@ -494,14 +505,46 @@ fn stage(
     let Some(name) = location.file_name() else {
         return Err(io::Error::other("the path names no file"));
     };
-    let mut temporary_name = OsString::from(".");
-    temporary_name.push(name);
-    temporary_name.push(format!(".splice-{}", process::id()));
-    let temporary = directory.join(temporary_name);
-    match write_synced(&temporary, text, permissions) {
+    let mode = permissions.map_or(NEW_FILE_MODE, |_| PRIVATE_FILE_MODE);
+    let (temporary, file) = create_temporary(directory, name, mode)?;
+    match write_synced(file, text, permissions) {
         Ok(()) => Ok(temporary),
         Err(error) => Err(without_temporary(&temporary, error)),
     }
+}
+
+/// Creates the first free temporary name beside the file `name`, opening only a path
+/// that does not exist yet, so a leftover temporary or a link someone planted at the
+/// name is stepped past rather than written through.
+fn create_temporary(directory: &Path, name: &OsStr, mode: u32) -> io::Result<(PathBuf, fs::File)> {
+    for attempt in 0..TEMPORARY_NAMES_MAX {
+        let temporary = directory.join(temporary_name(name, attempt));
+        let opened = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(mode)
+            .open(&temporary);
+        match opened {
+            Ok(file) => return Ok((temporary, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!("all {TEMPORARY_NAMES_MAX} temporary names beside the file are taken"),
+    ))
+}
+
+/// `.NAME.splice` for the first attempt, then `.NAME.splice-1`, `.NAME.splice-2`, and on.
+fn temporary_name(name: &OsStr, attempt: usize) -> OsString {
+    let mut temporary = OsString::from(".");
+    temporary.push(name);
+    temporary.push(".splice");
+    if attempt > 0 {
+        temporary.push(format!("-{attempt}"));
+    }
+    temporary
 }
 
 /// `error` once the temporary it left behind is removed, or `error` naming the
@@ -517,8 +560,11 @@ fn without_temporary(temporary: &Path, error: io::Error) -> io::Error {
     }
 }
 
-fn write_synced(path: &Path, text: &str, permissions: Option<&fs::Permissions>) -> io::Result<()> {
-    let mut file = fs::File::create(path)?;
+fn write_synced(
+    mut file: fs::File,
+    text: &str,
+    permissions: Option<&fs::Permissions>,
+) -> io::Result<()> {
     file.write_all(text.as_bytes())?;
     if let Some(permissions) = permissions {
         file.set_permissions(permissions.clone())?;
