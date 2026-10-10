@@ -57,12 +57,13 @@ Headers:
   @@ final newline       ends the last line of a file that lacks a final newline
 
 Matching is literal and by whole lines, except under inline, which matches text
-anywhere and joins its lines at the file's own line break, and regex. Every hunk
-matches the file as it was before any hunk applied, so line numbers stay valid across
-a batch and hunks must not overlap. A hunk that would leave its file unchanged is
-refused, and so are hunks that together would. A file that lacks a final newline
-keeps lacking one unless `@@ final newline` adds it. Blank lines at a hunk's edges are
-dropped; write a lone space for a blank context line there.
+anywhere and joins its lines at the file's own line break, and regex, whose '+' lines
+join at that line break too. Every hunk matches the file as it was before any hunk
+applied, so line numbers stay valid across a batch and hunks must not overlap. A hunk
+that would leave its file unchanged is refused, and so are hunks that together would.
+A file that lacks a final newline keeps lacking one unless `@@ final newline` adds it.
+Blank lines at a hunk's edges are dropped; write a lone space for a blank context line
+there.
 
 Exit status:
   0  every file written
@@ -236,6 +237,9 @@ fn near_miss(near: &NearMiss) -> String {
         }
         NearMiss::AfterElision { file_line } => format!(
             "  closest: the lines above `~` match from file line {file_line}, and the lines below it are not found after them\n"
+        ),
+        NearMiss::CarriageReturn { file_line } => format!(
+            "  closest: file line {file_line} holds the hunk's line and then a carriage return; the file mixes CRLF and LF line endings, so the `\\r` is part of the line, which a hunk line cannot hold, and `@@ inline` matches the text before it\n"
         ),
         NearMiss::Diverges {
             file_line,

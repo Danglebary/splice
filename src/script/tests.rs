@@ -347,7 +347,7 @@ mod given_a_regex_hunk {
             script.sections[0].hunks[0].operation,
             Operation::Regex {
                 pattern: Pattern::compile("fn (\\w+)\\(").unwrap(),
-                replacement: "pub fn $1(".to_owned(),
+                replacement: vec!["pub fn $1(".to_owned()],
                 expectation: Expectation::All,
             }
         );

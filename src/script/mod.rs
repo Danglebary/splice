@@ -35,11 +35,12 @@ pub enum Operation {
         block: Vec<BlockLine>,
         expectation: Expectation,
     },
-    /// Matches `pattern` over the whole text and replaces each match with `replacement`,
-    /// whose `$1` and `${name}` expand to the match's groups.
+    /// Matches `pattern` over the whole text and replaces each match with the
+    /// `replacement` lines joined at the file's own line break, where `$1` and `${name}`
+    /// expand to the match's groups.
     Regex {
         pattern: Pattern,
-        replacement: String,
+        replacement: Vec<String>,
         expectation: Expectation,
     },
     /// Matches the `old` lines, joined at the file's own line break, as text anywhere in
@@ -568,7 +569,7 @@ fn build_regex(
     for (line, entry) in body {
         match entry {
             Entry::Remove(text) => pattern_lines.push(*text),
-            Entry::Add(text) => replacement_lines.push(*text),
+            Entry::Add(text) => replacement_lines.push((*text).to_owned()),
             Entry::Blank | Entry::Context(_) | Entry::Elision => {
                 return Err(ScriptError {
                     line: *line,
@@ -595,10 +596,9 @@ fn build_regex(
             });
         }
     };
-    let replacement = replacement_lines.join("\n");
     Ok(Operation::Regex {
         pattern,
-        replacement,
+        replacement: replacement_lines,
         expectation,
     })
 }

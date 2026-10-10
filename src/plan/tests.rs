@@ -171,6 +171,36 @@ mod given_a_hunk_matching_nowhere {
             }]
         );
     }
+
+    #[test]
+    fn when_planned_against_a_line_ending_in_a_carriage_return_then_the_near_miss_names_it() {
+        let reasons = refused(Some("a\r\nb\nc\r\n"), "@@\n-a\n+A\n");
+
+        assert_eq!(
+            reasons,
+            vec![Reason::Count {
+                expected: Expectation::Once,
+                found: 0,
+                found_lines: Vec::new(),
+                near_miss: Some(NearMiss::CarriageReturn { file_line: 1 }),
+            }]
+        );
+    }
+
+    #[test]
+    fn when_planned_against_a_later_line_ending_in_a_carriage_return_then_the_near_miss_names_it() {
+        let reasons = refused(Some("a\nb\r\nc\n"), "@@\n a\n-b\n+B\n");
+
+        assert_eq!(
+            reasons,
+            vec![Reason::Count {
+                expected: Expectation::Once,
+                found: 0,
+                found_lines: Vec::new(),
+                near_miss: Some(NearMiss::CarriageReturn { file_line: 2 }),
+            }]
+        );
+    }
 }
 
 mod given_hunks_declaring_how_many_matches {
@@ -364,6 +394,13 @@ mod given_a_regex_hunk {
         let reasons = refused(Some("abc\n"), "@@ regex\n-b\n+b\n");
 
         assert_eq!(reasons, vec![Reason::Unchanged]);
+    }
+
+    #[test]
+    fn when_planned_with_a_replacement_spanning_lines_of_a_crlf_file_then_the_lines_join_at_crlf() {
+        let text = applied("x\r\ny\r\n", "@@ regex\n-x\n+x\n+inserted\n");
+
+        assert_eq!(text, "x\r\ninserted\r\ny\r\n");
     }
 }
 

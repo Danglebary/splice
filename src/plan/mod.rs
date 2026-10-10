@@ -67,6 +67,10 @@ pub enum NearMiss {
     /// The lines above the first elision match from this line, and the lines below it are
     /// found nowhere after them.
     AfterElision { file_line: usize },
+    /// This line holds the hunk's line followed by a carriage return, which a hunk line
+    /// cannot hold: a file that mixes CRLF and LF line endings keeps each `\r` as part of
+    /// its line.
+    CarriageReturn { file_line: usize },
     /// The longest start of an inline hunk's text the file holds runs up to this line,
     /// and `expected` and `found` are the two texts from where they part.
     Diverges {
@@ -233,7 +237,7 @@ struct Edit {
 /// A regex hunk's operation, borrowed from its script.
 struct Substitution<'o> {
     pattern: &'o Pattern,
-    replacement: &'o str,
+    replacement: &'o [String],
     expectation: Expectation,
 }
 
@@ -684,13 +688,14 @@ fn regex_edits(
     substitution: &Substitution<'_>,
 ) -> Result<Vec<Replacement>, Reason> {
     let regex = substitution.pattern.regex();
+    let replacement = substitution.replacement.join(document.eol);
     let mut matches = Vec::new();
     for captures in regex.captures_iter(document.text) {
         let Some(whole) = captures.get(0) else {
             unreachable!("a match holds its whole span as group zero");
         };
         let mut expanded = String::new();
-        captures.expand(substitution.replacement, &mut expanded);
+        captures.expand(&replacement, &mut expanded);
         let line = document.line_number_of_byte(whole.start());
         matches.push((
             line,
@@ -823,14 +828,27 @@ fn near_miss(document: &Document<'_>, segments: &[Vec<&str>]) -> Option<NearMiss
         let Some(expected) = leading.get(matched) else {
             unreachable!("a partial match stops inside the segment");
         };
-        let found = document.content(differing).map(str::to_owned);
+        let found = document.content(differing);
+        if carriage_return_after(found, expected) {
+            return Some(NearMiss::CarriageReturn {
+                file_line: after(differing),
+            });
+        }
         return Some(NearMiss::Differs {
             file_line: after(differing),
             expected: (*expected).to_owned(),
-            found,
+            found: found.map(str::to_owned),
         });
     }
-    let target = leading.first()?.trim();
+    let first = leading.first()?;
+    let returned = (0..document.line_count())
+        .find(|index| carriage_return_after(document.content(*index), first));
+    if let Some(index) = returned {
+        return Some(NearMiss::CarriageReturn {
+            file_line: after(index),
+        });
+    }
+    let target = first.trim();
     if target.is_empty() {
         return None;
     }
@@ -842,6 +860,11 @@ fn near_miss(document: &Document<'_>, segments: &[Vec<&str>]) -> Option<NearMiss
     similar.map(|index| NearMiss::Whitespace {
         file_line: after(index),
     })
+}
+
+/// Whether a file line's `content` is `expected` followed by a carriage return.
+fn carriage_return_after(content: Option<&str>, expected: &str) -> bool {
+    content.and_then(|text| text.strip_suffix('\r')) == Some(expected)
 }
 
 #[cfg(test)]
