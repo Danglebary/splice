@@ -5,7 +5,7 @@ description: Edit files from Bash with `splice` instead of sed -i, perl -i, awk,
 
 # Editing with splice
 
-`splice` reads an edit script on stdin and applies every hunk to every file, or writes nothing at all. It matches text literally, by whole lines or, under `@@ inline`, anywhere within a line, so nothing in the script is ever escaped, and it checks each hunk's match count before it writes. It prints nothing on success; its exit code is the result.
+`splice` reads an edit script on stdin and applies every hunk to every file, or writes nothing at all. It matches text literally, by whole lines or, under `@@ inline`, anywhere within a line, so nothing in the script is ever escaped, and it checks each hunk's match count before it writes. On success it prints one line, such as `splice: 3 hunks written to 2 files`; its exit code is the result.
 
 Use it for any edit made from Bash. The Edit tool stays fine for a single change to a file you have open; reach for splice when the edit is a batch, belongs in the same call as its check, or is anchored by line number or by markers. Never edit a file through `sed -i`, `perl -i`, `awk -i inplace`, or a Python or Node write: the hook blocks those commands.
 

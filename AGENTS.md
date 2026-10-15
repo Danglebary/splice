@@ -30,7 +30,7 @@ A test is a function named `when_<operation>_then_<result>` in a module named `g
 
 The hook's verdict was checked against every Bash command in this machine's Claude Code transcripts; when `guard` changes, rerun that check rather than trusting the unit rows alone: feed each command through `splice guard` as hook JSON and read what it blocks.
 
-The README's measured outcome comes from the same transcripts: every Bash call whose command runs `splice` with a script, joined to its result. Count refusals by the `splice:` lines in the result text, never by the harness's error flag, which a trailing `echo $?` or a `;`-chained command hides them from. Redo the count when the README's number is touched.
+The README's measured outcome comes from the same transcripts: every Bash call whose command runs `splice` with a script, joined to its result. Count refusals by the `splice:` lines in the result text other than the `written to` line a script that landed prints, never by the harness's error flag, which a trailing `echo $?` or a `;`-chained command hides them from. Redo the count when the README's number is touched.
 
 ## Releases
 

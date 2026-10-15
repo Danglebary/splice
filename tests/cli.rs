@@ -3,9 +3,11 @@
 //! turns on. The pure rules are tested in the library; these cases cover the wiring.
 
 use std::fs;
+use std::num::NonZeroUsize;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
+use splice::report::{self, Landed};
 use support::{Scratch, stderr, stdout};
 
 #[cfg(test)]
@@ -105,20 +107,27 @@ mod given_a_script_whose_hunks_all_match {
     use super::*;
 
     #[test]
-    fn when_applied_then_every_file_is_written_and_nothing_is_printed() {
+    fn when_applied_then_every_file_is_written_and_one_line_on_stderr_counts_it() {
         let scratch = Scratch::new();
-        scratch.write("a.rs", "fn a() {\n    old();\n}\n");
+        scratch.write("a.rs", "fn a() {\n    old();\n}\n\nfn b() {}\n");
         scratch.write("b.md", "# Title\n");
 
         let output = scratch.run(
             &[],
-            "=== a.rs\n@@\n-    old();\n+    new();\n=== b.md\n@@ append\n+Body.\n",
+            "=== a.rs\n@@\n-    old();\n+    new();\n@@\n-fn b() {}\n+fn b() { new(); }\n=== b.md\n@@ append\n+Body.\n",
         );
 
+        let landed = Landed {
+            hunk_count: NonZeroUsize::new(3).unwrap(),
+            file_count: NonZeroUsize::new(2).unwrap(),
+        };
         assert_eq!(output.status.code(), Some(0));
         assert_eq!(stdout(&output), "");
-        assert_eq!(stderr(&output), "");
-        assert_eq!(scratch.read("a.rs"), "fn a() {\n    new();\n}\n");
+        assert_eq!(stderr(&output), report::landed(&landed));
+        assert_eq!(
+            scratch.read("a.rs"),
+            "fn a() {\n    new();\n}\n\nfn b() { new(); }\n"
+        );
         assert_eq!(scratch.read("b.md"), "# Title\nBody.\n");
     }
 
@@ -144,6 +153,17 @@ mod given_a_script_whose_hunks_all_match {
         assert_eq!(output.status.code(), Some(0));
         assert!(stdout(&output).contains("+y\n"));
         assert_eq!(scratch.read("a.txt"), "x\n");
+    }
+
+    #[test]
+    fn when_applied_with_dry_run_then_no_line_reports_a_write() {
+        let scratch = Scratch::new();
+        scratch.write("a.txt", "x\n");
+
+        let output = scratch.run(&["--dry-run"], "=== a.txt\n@@\n-x\n+y\n");
+
+        assert_eq!(output.status.code(), Some(0));
+        assert_eq!(stderr(&output), "");
     }
 
     #[test]
@@ -393,6 +413,17 @@ mod given_the_try_subcommand {
 
         assert_eq!(output.status.code(), Some(0));
         assert_eq!(scratch.read("a.txt"), "x\n");
+    }
+
+    #[test]
+    fn when_run_then_no_line_reports_a_write_it_restored() {
+        let scratch = Scratch::new();
+        scratch.write("a.txt", "x\n");
+
+        let output = scratch.run(&["try", "--", "true"], "=== a.txt\n@@\n-x\n+y\n");
+
+        assert_eq!(output.status.code(), Some(0));
+        assert_eq!(stderr(&output), "");
     }
 
     #[test]

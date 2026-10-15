@@ -12,6 +12,28 @@ pub struct Script {
     pub sections: Vec<Section>,
 }
 
+impl Script {
+    /// How many hunks the script holds, a hunk shared by several files counted once.
+    ///
+    /// # Panics
+    ///
+    /// Panics when a section holds no hunk, which no parsed script does.
+    #[must_use]
+    pub fn hunk_count(&self) -> usize {
+        let counted = self.sections.iter().try_fold(0_usize, |count, section| {
+            count.checked_add(section.hunks.len())
+        });
+        let Some(count) = counted else {
+            unreachable!("a script holds fewer hunks than a usize counts");
+        };
+        assert!(
+            count >= self.sections.len(),
+            "the parser refuses a section without hunks"
+        );
+        count
+    }
+}
+
 /// The paths named by consecutive `===` lines and the hunks applied to each of them.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Section {

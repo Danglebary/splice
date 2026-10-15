@@ -204,6 +204,19 @@ mod given_consecutive_file_headers {
     }
 }
 
+mod given_a_script_whose_sections_share_hunks {
+    use super::*;
+
+    #[test]
+    fn when_its_hunks_are_counted_then_a_hunk_shared_by_several_files_counts_once() {
+        let script =
+            parse("=== a.rs\n=== b.rs\n@@ all\n-old\n+new\n=== c.rs\n@@\n-x\n+y\n@@ append\n+z\n")
+                .unwrap();
+
+        assert_eq!(script.hunk_count(), 3);
+    }
+}
+
 mod given_lines_outside_any_hunk {
     use super::*;
 
