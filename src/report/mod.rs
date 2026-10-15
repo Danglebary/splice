@@ -1,6 +1,8 @@
 //! Every message splice prints, rendered from the library's typed outcomes. Pure, so
 //! each message is built from values a test constructs.
 
+use std::num::NonZeroUsize;
+
 use crate::cli::UsageFault;
 use crate::guard::{HookInputFault, Offense};
 use crate::plan::{NearMiss, Reason, Refusal};
@@ -21,8 +23,10 @@ Usage:
       command that edits a file through sed -i, perl -i, a Python or Node write, or a
       rewrite moved over the original.
 
-Silent on success. --diff prints the diff of what was written; --dry-run prints the
-diff and writes nothing.
+A script that lands prints one line on stderr counting its hunks and the files they
+were written to; --dry-run and try, which leave every file as it was, print none.
+--diff prints the diff of what was written; --dry-run prints the diff and writes
+nothing.
 
 Script, best passed as a quoted heredoc so nothing in it is ever escaped:
 
@@ -80,6 +84,30 @@ Exit status:
 pub const NOTHING_WRITTEN: &str = "splice: nothing written\n";
 
 pub const INTERRUPTED: &str = "splice: interrupted; the files are restored\n";
+
+/// What a script that landed wrote: the hunks it holds and the files they went to.
+pub struct Landed {
+    pub hunk_count: NonZeroUsize,
+    pub file_count: NonZeroUsize,
+}
+
+/// The one line a script that landed prints, counting its hunks and the files they
+/// were written to.
+#[must_use]
+pub fn landed(counts: &Landed) -> String {
+    let hunks = quantity(counts.hunk_count, "hunk");
+    let files = quantity(counts.file_count, "file");
+    format!("splice: {hunks} written to {files}\n")
+}
+
+/// A count and its noun, the noun plural for every count but one.
+fn quantity(count: NonZeroUsize, noun: &str) -> String {
+    if count.get() == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{count} {noun}s")
+    }
+}
 
 #[must_use]
 pub fn script_error(error: &ScriptError) -> String {

@@ -5,6 +5,7 @@
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, Read, Write};
+use std::num::NonZeroUsize;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
@@ -81,6 +82,12 @@ struct Change {
     planned: String,
 }
 
+/// A script's planned changes, one per file, and the count of hunks the script holds.
+struct Batch {
+    changes: Vec<Change>,
+    hunk_count: usize,
+}
+
 enum Prepared {
     Ready(Vec<Change>),
     Refused(Vec<(String, Refusal)>),
@@ -88,25 +95,43 @@ enum Prepared {
 }
 
 fn run_apply(options: &Options) -> u8 {
-    let changes = match load_changes(options) {
-        Ok(changes) => changes,
+    let batch = match load_changes(options) {
+        Ok(batch) => batch,
         Err(code) => return code,
     };
     if options.diff || options.dry_run {
-        print_diffs(&changes);
+        print_diffs(&batch.changes);
     }
     if options.dry_run {
         return exit_code::SUCCESS;
     }
-    if let Err(code) = write_all(&changes) {
+    if let Err(code) = write_all(&batch.changes) {
         return code;
     }
-    verify_written(&changes)
+    let verified = verify_written(&batch.changes);
+    if verified == exit_code::SUCCESS {
+        eprint!("{}", report::landed(&landed_of(&batch)));
+    }
+    verified
+}
+
+/// The counts a batch that landed reports.
+fn landed_of(batch: &Batch) -> report::Landed {
+    let Some(hunk_count) = NonZeroUsize::new(batch.hunk_count) else {
+        unreachable!("the parser refuses a script without hunks");
+    };
+    let Some(file_count) = NonZeroUsize::new(batch.changes.len()) else {
+        unreachable!("a script naming no file is refused before it is planned");
+    };
+    report::Landed {
+        hunk_count,
+        file_count,
+    }
 }
 
 fn run_try(options: &Options, expect_failure: bool, program: &[String]) -> u8 {
     let changes = match load_changes(options) {
-        Ok(changes) => changes,
+        Ok(batch) => batch.changes,
         Err(code) => return code,
     };
     let Some((name, arguments)) = program.split_first() else {
@@ -249,10 +274,13 @@ fn run_guard() -> u8 {
 }
 
 /// Reads and parses the script, then reads and plans every file it names.
-fn load_changes(options: &Options) -> Result<Vec<Change>, u8> {
+fn load_changes(options: &Options) -> Result<Batch, u8> {
     let script = read_script(options)?;
     match prepare(&script) {
-        Prepared::Ready(changes) => Ok(changes),
+        Prepared::Ready(changes) => Ok(Batch {
+            changes,
+            hunk_count: script.hunk_count(),
+        }),
         Prepared::Refused(refused) => {
             for (path, refusal) in &refused {
                 eprint!("{}", report::refusal(path, refusal));

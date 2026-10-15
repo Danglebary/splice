@@ -181,3 +181,38 @@ mod given_a_near_miss_found_inside_a_line {
         assert!(message.contains("`@@ inline`"));
     }
 }
+
+mod given_a_script_that_landed {
+    use super::*;
+
+    fn landed_of(hunk_count: usize, file_count: usize) -> Landed {
+        Landed {
+            hunk_count: NonZeroUsize::new(hunk_count).unwrap(),
+            file_count: NonZeroUsize::new(file_count).unwrap(),
+        }
+    }
+
+    #[test]
+    fn when_rendered_then_it_is_one_line_under_the_splice_prefix() {
+        let message = landed(&landed_of(3, 2));
+
+        assert!(message.starts_with("splice: "));
+        assert_eq!(message.lines().count(), 1);
+        assert!(message.ends_with('\n'));
+    }
+
+    #[test]
+    fn when_rendered_then_it_counts_the_hunks_and_the_files_in_the_right_number() {
+        let cases = [
+            (1, 1, "1 hunk written", "to 1 file\n"),
+            (3, 1, "3 hunks written", "to 1 file\n"),
+            (1, 2, "1 hunk written", "to 2 files\n"),
+        ];
+        for (hunk_count, file_count, hunks, files) in cases {
+            let message = landed(&landed_of(hunk_count, file_count));
+
+            assert!(message.contains(hunks), "{message:?} lacks {hunks:?}");
+            assert!(message.contains(files), "{message:?} lacks {files:?}");
+        }
+    }
+}
