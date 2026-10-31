@@ -72,3 +72,9 @@ The hook runs `splice guard` before every Bash call. Without the binary on `PATH
 `just check` is the gate: the format check, clippy with every warning denied, the tests, and Claude Code's plugin validator. The toolchain is the one `rust-toolchain.toml` pins; the flake's shell provides it, and the recipes enter that shell themselves.
 
 A release is cut by raising `version` in `Cargo.toml` and in `claude-code/splice/.claude-plugin/plugin.json` (a test holds the two equal) and merging to `main`; the release workflow builds and publishes it.
+
+## License
+
+Licensed under either of the [Apache License, Version 2.0](LICENSE-APACHE) or the [MIT license](LICENSE-MIT), at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
