@@ -68,7 +68,7 @@ jobs:
         run: |
           staging="splice-${{ matrix.target }}"
           mkdir "$staging"
-          cp "target/${{ matrix.target }}/release/splice" LICENSE README.md "$staging/"
+          cp "target/${{ matrix.target }}/release/splice" LICENSE-MIT LICENSE-APACHE README.md "$staging/"
           tar --create --gzip --file "$staging.tar.gz" "$staging"
           shasum --algorithm 256 "$staging.tar.gz" > "$staging.tar.gz.sha256"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

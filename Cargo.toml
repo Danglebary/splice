@@ -6,7 +6,7 @@ edition = "2024"
 # pins rather than the floor a dependency declares.
 rust-version = "1.99"
 description = "Applies a script of literal, count-checked edits to text files, all of them or none, quiet on success"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 repository = "https://github.com/Danglebary/splice"
 
 [dependencies]
