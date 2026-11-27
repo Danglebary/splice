@@ -14,7 +14,7 @@ The engineering style guide at `~/.claude/CLAUDE.md` governs. This file states o
 
 The toolchain is pinned once, in `rust-toolchain.toml`, which both the flake and CI's rustup read.
 
-CI also builds the flake's package on Linux and macOS. It compiles from the file set `flake.nix` lists, so a file the manifest names outside `src/`, such as a declared bench, joins that set.
+CI also builds the flake's package on Linux. It compiles from the file set `flake.nix` lists, so a file the manifest names outside `src/`, such as a declared bench, joins that set.
 
 ## Shape
 

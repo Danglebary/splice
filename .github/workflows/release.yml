@@ -47,16 +47,11 @@ jobs:
             runner: ubuntu-24.04
           - target: aarch64-unknown-linux-musl
             runner: ubuntu-24.04-arm
-          - target: x86_64-apple-darwin
-            runner: macos-15
-          - target: aarch64-apple-darwin
-            runner: macos-15
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install the musl linker
-        if: contains(matrix.target, 'musl')
         run: sudo apt-get update && sudo apt-get install --yes musl-tools
       - name: Add the target
         run: rustup target add ${{ matrix.target }}

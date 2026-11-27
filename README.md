@@ -35,11 +35,11 @@ Every hunk line opens with its marker: a space for a context line, `-` for a rem
 | `@@ create` | `+` lines written to a file that does not exist yet |
 | `@@ final newline` | ends the last line of a file that lacks a final newline |
 
-`splice try` applies a script, runs a command, and restores every file afterwards; `--expect-fail` turns a failing command into exit 0, for a mutation test. `splice --help` prints the whole grammar, and the Claude Code skill shows the patterns. The binary runs on Linux and macOS.
+`splice try` applies a script, runs a command, and restores every file afterwards; `--expect-fail` turns a failing command into exit 0, for a mutation test. `splice --help` prints the whole grammar, and the Claude Code skill shows the patterns. The binary runs on Linux.
 
 ## Install
 
-The binary, from the latest release (Linux and macOS, x86_64 and aarch64):
+The binary, from the latest release (Linux, x86_64 and aarch64):
 
 ```sh
 curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/Danglebary/splice/main/install.sh | sh

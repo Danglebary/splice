@@ -12,7 +12,6 @@ install_dir="${SPLICE_INSTALL_DIR:-$HOME/.local/bin}"
 
 case "$(uname -s)" in
     Linux) system="unknown-linux-musl" ;;
-    Darwin) system="apple-darwin" ;;
     *) echo "splice install: no release is built for $(uname -s)" >&2; exit 1 ;;
 esac
 
