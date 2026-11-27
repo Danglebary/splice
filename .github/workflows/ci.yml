@@ -1,6 +1,6 @@
 # The Rust half of the gate and the flake's package build, on every pull request and
-# every push to main, on Linux and macOS, since the binary ships for both. rustup
-# installs the toolchain that `rust-toolchain.toml` pins the first time cargo runs.
+# every push to main, on Linux. rustup installs the toolchain that `rust-toolchain.toml`
+# pins the first time cargo runs.
 name: CI
 
 on:
@@ -13,11 +13,7 @@ permissions:
 
 jobs:
   check:
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [ubuntu-24.04, macos-15]
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -31,11 +27,7 @@ jobs:
   # The flake's package, built inside the Nix sandbox from the file set `flake.nix`
   # lists, where `check` builds from the whole checkout.
   package:
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [ubuntu-24.04, macos-15]
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
